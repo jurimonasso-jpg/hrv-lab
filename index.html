@@ -427,9 +427,11 @@ select {
           <div id="manual-torch-panel" class="manual-torch-panel" style="display:none">
             <div class="manual-torch-title">🔦 Modalità torcia manuale</div>
             <div>1) Apri il pannello rapido del telefono.<br>2) Accendi <b>Torcia</b> manualmente.<br>3) Torna qui, appoggia il dito sulla camera vicino al flash e premi il pulsante sotto.</div>
+            <div id="manual-camera-status" style="font-size:12px;color:var(--dim2);margin-top:8px;line-height:1.4">Camera: in preparazione…</div>
             <button id="manual-start-btn" class="btn btn-primary btn-sm" type="button">Ho acceso la torcia — avvia acquisizione</button>
-            <button class="btn btn-secondary btn-sm" type="button" onclick="App.ppg.cycleManualCamera()">Cambia camera posteriore</button>
+            <button id="manual-cycle-btn" class="btn btn-secondary btn-sm" type="button" onclick="App.ppg.cycleManualCamera()">🔁 Cambia camera / zoom</button>
           </div>
+          <button id="manual-cycle-live-btn" class="btn btn-secondary btn-sm" type="button" onclick="App.ppg.cycleManualCamera()" style="width:100%;display:none">🔁 Cambia camera / zoom</button>
           <button class="btn btn-danger btn-sm" onclick="App.ppg.stop(true)" style="width:100%">✕ Annulla misurazione</button>
         </div>
 
@@ -837,6 +839,8 @@ const App = (() => {
     mode      : 'auto',
     manualCandidates : [],
     manualCamIndex   : 0,
+    manualConfirmToken : 0,
+    waitingManualConfirm : false,
 
     _cameraConstraints (deviceId = null) {
       const base = {
@@ -903,6 +907,65 @@ const App = (() => {
 
 
 
+    _cameraLabelFromConstraint (variant, fallbackIndex) {
+      if (variant?.label) return variant.label;
+      const v = variant?.constraints?.video || {};
+      if (v?.deviceId?.exact) return 'Camera ' + String(fallbackIndex + 1);
+      if (v?.facingMode?.exact || v?.facingMode?.ideal) return 'Camera posteriore generica';
+      return 'Camera generica';
+    },
+
+    async _applyZoomPreset (stream, preset) {
+      if (!preset || preset === 'auto') return null;
+      const track = stream?.getVideoTracks?.()[0];
+      if (!track) return null;
+
+      try {
+        const caps = track.getCapabilities?.() || {};
+        if (!caps.zoom) return null;
+
+        const min  = Number(caps.zoom.min ?? 1);
+        const max  = Number(caps.zoom.max ?? min);
+        const step = Number(caps.zoom.step ?? 0.1);
+        if (!isFinite(min) || !isFinite(max) || max <= min) return null;
+
+        let zoom;
+        if (preset === 'min') zoom = min;
+        else if (preset === 'mid') zoom = min + (max - min) * 0.45;
+        else if (preset === 'high') zoom = min + (max - min) * 0.70;
+        else if (preset === 'max') zoom = max;
+        else return null;
+
+        zoom = Math.max(min, Math.min(max, zoom));
+        zoom = Math.round(zoom / step) * step;
+        await track.applyConstraints({ advanced: [{ zoom }] });
+        return zoom;
+      } catch {
+        return null;
+      }
+    },
+
+    _updateManualCameraUI (variant, zoomApplied = null) {
+      const status = document.getElementById('manual-camera-status');
+      const btn1   = document.getElementById('manual-cycle-btn');
+      const btn2   = document.getElementById('manual-cycle-live-btn');
+      const total  = this.manualCandidates.length || 1;
+      const n      = (this.manualCamIndex % total) + 1;
+
+      const track = this.stream?.getVideoTracks?.()[0];
+      const settings = track?.getSettings?.() || {};
+      const zoomNow = settings.zoom ?? zoomApplied;
+      const label = this._cameraLabelFromConstraint(variant, this.manualCamIndex);
+      const zoomTxt = zoomNow ? ` · zoom ${Number(zoomNow).toFixed(1)}x` : '';
+
+      if (status) {
+        status.textContent = `Camera ${n}/${total}: ${label}${zoomTxt}. Se vedi la camera sbagliata, premi “Cambia camera / zoom”.`;
+      }
+      const nextText = total > 1 ? `🔁 Cambia camera / zoom (${n}/${total})` : '🔁 Riprova camera / zoom';
+      if (btn1) btn1.textContent = nextText;
+      if (btn2) btn2.textContent = nextText;
+    },
+
     async _buildManualCameraCandidates () {
       let probe = null;
 
@@ -920,23 +983,40 @@ const App = (() => {
         devices = all.filter(d => d.kind === 'videoinput');
       } catch {}
 
+      const used = new Set();
+      const candidates = [];
+      const addVariantSet = (constraints, labelBase) => {
+        candidates.push({ label: `${labelBase} · auto`, constraints, zoomPreset: 'auto' });
+        candidates.push({ label: `${labelBase} · zoom basso`, constraints, zoomPreset: 'min' });
+        candidates.push({ label: `${labelBase} · zoom medio`, constraints, zoomPreset: 'mid' });
+        candidates.push({ label: `${labelBase} · zoom alto`, constraints, zoomPreset: 'high' });
+      };
+
       const rearDevices = devices
         .filter(d => !/front|user|selfie|anteriore/.test((d.label || '').toLowerCase()))
         .sort((a, b) => this._cameraScore(b) - this._cameraScore(a));
 
-      const candidates = rearDevices.map(d => this._cameraConstraints(d.deviceId));
+      rearDevices.forEach((d, i) => {
+        if (!d?.deviceId || used.has(d.deviceId)) return;
+        used.add(d.deviceId);
+        addVariantSet(this._cameraConstraints(d.deviceId), d.label || `Camera posteriore ${i + 1}`);
+      });
 
-      /* Fallback: manteniamo solo camere posteriori/generiche, senza tentare il torch */
-      candidates.push({ video: { facingMode: { exact: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 60 } }, audio: false });
-      candidates.push(this._cameraConstraints());
-      candidates.push({ video: true, audio: false });
+      const genericBases = [
+        { label:'Posteriore richiesta dal browser', constraints:{ video:{ facingMode:{ exact:'environment' }, width:{ ideal:640 }, height:{ ideal:480 }, frameRate:{ ideal:30, max:60 } }, audio:false } },
+        { label:'Posteriore generica', constraints:this._cameraConstraints() },
+        { label:'Camera generica', constraints:{ video:true, audio:false } }
+      ];
 
+      genericBases.forEach(g => addVariantSet(g.constraints, g.label));
+
+      this.manualCandidates = candidates;
       return candidates;
     },
 
     async _openManualCameraAt (index = 0) {
       if (!this.manualCandidates.length) {
-        this.manualCandidates = await this._buildManualCameraCandidates();
+        await this._buildManualCameraCandidates();
       }
 
       const vid = document.getElementById('cam');
@@ -945,18 +1025,22 @@ const App = (() => {
 
       for (let i = 0; i < total; i++) {
         const idx = (index + i) % total;
-        const c = this.manualCandidates[idx];
+        const variant = this.manualCandidates[idx];
         try {
           this.stream?.getTracks?.().forEach(t => t.stop());
-          this.stream = await navigator.mediaDevices.getUserMedia(c);
+          this.stream = await navigator.mediaDevices.getUserMedia(variant.constraints);
           this.manualCamIndex = idx;
           vid.srcObject = this.stream;
           await this._waitVideoReady(vid);
+          const zoomApplied = await this._applyZoomPreset(this.stream, variant.zoomPreset);
+          this._updateManualCameraUI(variant, zoomApplied);
           document.getElementById('status-msg').textContent =
-            'Camera posteriore pronta — ora puoi accendere la torcia dal pannello rapido';
+            'Camera pronta — scegli quella vicino al flash, poi accendi la torcia manuale';
           return true;
         } catch (e) {
           lastError = e;
+          this.stream?.getTracks?.().forEach(t => t.stop());
+          this.stream = null;
         }
       }
 
@@ -966,9 +1050,30 @@ const App = (() => {
     },
 
     async cycleManualCamera () {
-      if (this.timerInt || this.rafId) return;
-      document.getElementById('status-msg').textContent = 'Cambio camera posteriore…';
-      await this._openManualCameraAt(this.manualCamIndex + 1);
+      const vid = document.getElementById('cam');
+      const wasAcquiring = !!(this.timerInt || this.rafId);
+
+      if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; }
+      if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+
+      this.rawBuf = [];
+      this.tsArr  = [];
+      document.getElementById('timer-num').textContent = CFG.measureDuration;
+      document.getElementById('q-fill').style.width = '0%';
+      document.getElementById('q-num').textContent = '--';
+      document.getElementById('manual-torch-panel').style.display = '';
+      document.getElementById('manual-cycle-live-btn').style.display = '';
+      document.getElementById('status-msg').textContent = 'Cambio camera / zoom…';
+
+      const ok = await this._openManualCameraAt(this.manualCamIndex + 1);
+      if (!ok) return;
+
+      if (wasAcquiring && this.mode === 'manualTorch') {
+        await this._waitManualTorchConfirm();
+        if (!this.stream?.active) return;
+        document.getElementById('status-msg').textContent = '✓ Acquisizione avviata — tieni il dito fermo';
+        this._startAcquisition(vid);
+      }
     },
 
     _waitManualTorchConfirm () {
@@ -976,22 +1081,27 @@ const App = (() => {
       const btn = document.getElementById('manual-start-btn');
       if (!panel || !btn) return Promise.resolve();
 
+      const token = ++this.manualConfirmToken;
+      this.waitingManualConfirm = true;
       panel.style.display = '';
+      document.getElementById('manual-cycle-live-btn').style.display = '';
       document.getElementById('timer-num').textContent = CFG.measureDuration;
       document.getElementById('q-num').textContent = '--';
       document.getElementById('q-fill').style.width = '0%';
 
       return new Promise(resolve => {
-        const handler = () => {
-          btn.removeEventListener('click', handler);
+        btn.onclick = () => {
+          if (token !== this.manualConfirmToken) return;
+          this.waitingManualConfirm = false;
+          btn.onclick = null;
           panel.style.display = 'none';
           resolve();
         };
-        btn.addEventListener('click', handler, { once: true });
       });
     },
 
     _startAcquisition (vid) {
+      document.getElementById('manual-cycle-live-btn').style.display = this.mode === 'manualTorch' ? '' : 'none';
       this.rawBuf = [];
       this.tsArr  = [];
       this.t0     = performance.now();
@@ -1081,6 +1191,7 @@ const App = (() => {
       document.getElementById('ph-recording').style.display = '';
       document.getElementById('status-msg').textContent = 'Avvio fotocamera…';
       document.getElementById('manual-torch-panel').style.display = 'none';
+      document.getElementById('manual-cycle-live-btn').style.display = 'none';
       this.mode = mode;
       this.rawBuf = [];
       this.tsArr  = [];
@@ -1309,6 +1420,9 @@ const App = (() => {
       document.getElementById('timer-num').textContent = CFG.measureDuration;
       document.getElementById('status-msg').textContent = 'Attendere avvio acquisizione…';
       document.getElementById('manual-torch-panel').style.display = 'none';
+      document.getElementById('manual-cycle-live-btn').style.display = 'none';
+      const camStatus = document.getElementById('manual-camera-status');
+      if (camStatus) camStatus.textContent = 'Camera: in preparazione…';
     }
   };
 
