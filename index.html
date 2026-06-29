@@ -806,6 +806,95 @@ const App = (() => {
     tsArr     : [],   // timestamp ms dall'inizio
     t0        : 0,
 
+    _cameraConstraints (deviceId = null) {
+      const base = {
+        width     : { ideal: 640 },
+        height    : { ideal: 480 },
+        frameRate : { ideal: 30, max: 60 }
+      };
+      if (deviceId) base.deviceId = { exact: deviceId };
+      else base.facingMode = { ideal: 'environment' };
+      return { video: base, audio: false };
+    },
+
+    _cameraScore (device) {
+      const label = (device.label || '').toLowerCase();
+      let score = 0;
+      if (/back|rear|environment|posteriore|trás|arrière|rück/.test(label)) score += 30;
+      if (/wide|main|standard|0\.5|1x/.test(label)) score += 12;
+      if (/front|user|selfie|anteriore/.test(label)) score -= 100;
+      if (/tele|zoom|ultra|macro|depth|profondità|bokeh/.test(label)) score -= 25;
+      return score;
+    },
+
+    async _enableTorch (stream) {
+      const track = stream?.getVideoTracks?.()[0];
+      if (!track) return false;
+      try {
+        const caps = track.getCapabilities?.() || {};
+        if (!caps.torch) return false;
+        await track.applyConstraints({ advanced: [{ torch: true }] });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    async _openBestCamera () {
+      let lastError = null;
+      let probe = null;
+
+      /* Sblocca i nomi delle camere su Android: senza permesso spesso sono vuoti */
+      try {
+        probe = await navigator.mediaDevices.getUserMedia(this._cameraConstraints());
+      } catch (e) {
+        lastError = e;
+      } finally {
+        probe?.getTracks?.().forEach(t => t.stop());
+      }
+
+      const devices = [];
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices.push(...all.filter(d => d.kind === 'videoinput'));
+      } catch {}
+
+      /* Prima testa le camere posteriori più probabili, poi il fallback environment */
+      const candidates = devices
+        .sort((a, b) => this._cameraScore(b) - this._cameraScore(a))
+        .map(d => this._cameraConstraints(d.deviceId));
+
+      candidates.push(this._cameraConstraints());
+      candidates.push({ video: { facingMode: { exact: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 60 } }, audio: false });
+      candidates.push({ video: true, audio: false });
+
+      let bestStream = null;
+      let bestHasTorch = false;
+
+      for (const c of candidates) {
+        let s = null;
+        try {
+          s = await navigator.mediaDevices.getUserMedia(c);
+          const hasTorch = await this._enableTorch(s);
+
+          /* Per HRV da dito la camera giusta è quella che permette il flash */
+          if (hasTorch) return { stream: s, torch: true, error: null };
+
+          if (!bestStream) {
+            bestStream = s;
+            bestHasTorch = false;
+          } else {
+            s.getTracks().forEach(t => t.stop());
+          }
+        } catch (e) {
+          lastError = e;
+          s?.getTracks?.().forEach(t => t.stop());
+        }
+      }
+
+      return { stream: bestStream, torch: bestHasTorch, error: lastError };
+    },
+
     async start () {
       /* Reset UI */
       document.getElementById('ph-instructions').style.display = 'none';
@@ -822,23 +911,14 @@ const App = (() => {
         return;
       }
 
-      /* Accesso fotocamera con fallback progressivo */
-      const constraints = [
-        { video: { facingMode: {exact:'environment'}, width:320, height:240, frameRate:{ideal:30} } },
-        { video: { facingMode: 'environment',         width:320, height:240, frameRate:{ideal:30} } },
-        { video: true }
-      ];
-
-      let lastError = null;
-      for (const c of constraints) {
-        try { this.stream = await navigator.mediaDevices.getUserMedia(c); break; }
-        catch (e) { lastError = e; }
-      }
+      /* Accesso fotocamera: prima prova le camere posteriori e preferisce quella con torch */
+      const camResult = await this._openBestCamera();
+      this.stream = camResult.stream;
 
       if (!this.stream) {
         /* Mostra errore inline (non alert — bloccato su file://) */
         const isHttps = location.protocol === 'https:' || location.hostname === 'localhost';
-        const name    = lastError?.name || '';
+        const name    = camResult.error?.name || '';
         let msg;
         if (!isHttps) {
           msg = '⚠️ Richiede HTTPS. Carica il file su GitHub Pages — non funziona da file://.';
@@ -854,12 +934,7 @@ const App = (() => {
         return;
       }
 
-      /* Torch (flash LED) */
-      try {
-        const track = this.stream.getVideoTracks()[0];
-        const caps  = track.getCapabilities?.() || {};
-        if (caps.torch) await track.applyConstraints({ advanced: [{torch:true}] });
-      } catch {}
+      document.getElementById('status-msg').textContent = 'Fotocamera selezionata — attivo il flash…';
 
       /* Video element */
       const vid = document.getElementById('cam');
@@ -874,6 +949,12 @@ const App = (() => {
         setTimeout(resolve, 2000);
       });
 
+      /* Alcuni Android accettano torch solo dopo l'avvio reale del video */
+      if (!camResult.torch) camResult.torch = await this._enableTorch(this.stream);
+      document.getElementById('status-msg').textContent =
+        camResult.torch ? '✓ Flash attivo — appoggia il dito su camera + flash'
+                        : '⚠️ Flash non attivabile dal browser — usa luce esterna vicino alla camera';
+
       /* Canvas cattura (64×64 — bassa risoluzione, alta velocità) */
       this.capCanvas = document.createElement('canvas');
       this.capCanvas.width = this.capCanvas.height = 64;
@@ -884,8 +965,6 @@ const App = (() => {
       this.ppgCanvas.width  = this.ppgCanvas.offsetWidth  || 300;
       this.ppgCanvas.height = this.ppgCanvas.offsetHeight || 100;
       this.ppgCtx = this.ppgCanvas.getContext('2d');
-
-      document.getElementById('status-msg').textContent = 'Attendere avvio acquisizione…';
 
       /* Timer countdown */
       let rem = CFG.measureDuration;
