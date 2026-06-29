@@ -394,8 +394,8 @@ select {
           <div class="instructions-list">
             <div class="step"><span class="step-n">1</span><span>Siediti in modo rilassato, schiena appoggiata</span></div>
             <div class="step"><span class="step-n">2</span><span>Appoggia il dito sulla fotocamera + flash. Se il browser blocca il flash, puoi usare la modalità torcia manuale</span></div>
-            <div class="step"><span class="step-n">3</span><span>Pressione <b>leggera</b> — non schiacciare il sensore</span></div>
-            <div class="step"><span class="step-n">4</span><span>Respira normalmente, non muovere il dito per 60 secondi</span></div>
+            <div class="step"><span class="step-n">3</span><span>Pressione <b>leggera</b>: se il segnale cala, alleggerisci invece di premere di più</span></div>
+            <div class="step"><span class="step-n">4</span><span>La misura ora fa 5 secondi di stabilizzazione prima del timer</span></div>
             <div class="step"><span class="step-n">5</span><span>Ideale: mattina prima di caffè e allenamento</span></div>
           </div>
           <br>
@@ -426,7 +426,7 @@ select {
           <div class="status-msg" id="status-msg">Attendere avvio acquisizione…</div>
           <div id="manual-torch-panel" class="manual-torch-panel" style="display:none">
             <div class="manual-torch-title">🔦 Modalità torcia manuale</div>
-            <div>1) Apri il pannello rapido del telefono.<br>2) Accendi <b>Torcia</b> manualmente.<br>3) Torna qui, appoggia il dito sulla camera vicino al flash e premi il pulsante sotto.</div>
+            <div>1) Apri il pannello rapido del telefono.<br>2) Accendi <b>Torcia</b> manualmente.<br>3) Torna qui: il timer partirà dopo 5 secondi di stabilizzazione. Se la qualità resta bassa, prova più luce laterale o una torcia esterna.</div>
             <div id="manual-camera-status" style="font-size:12px;color:var(--dim2);margin-top:8px;line-height:1.4">Camera: in preparazione…</div>
             <button id="manual-start-btn" class="btn btn-primary btn-sm" type="button">Ho acceso la torcia — avvia acquisizione</button>
             <button id="manual-cycle-btn" class="btn btn-secondary btn-sm" type="button" onclick="App.ppg.cycleManualCamera()">🔁 Cambia camera / zoom</button>
@@ -504,9 +504,10 @@ const App = (() => {
      ------------------------------------------------------------------- */
   const CFG = {
     measureDuration : 60,    // secondi misura
+    warmupDuration  : 5,     // secondi di stabilizzazione prima del timer
     minDuration     : 45,    // secondi minimi validi
     minBeats        : 35,    // battiti minimi validi
-    minQuality      : 70,    // qualità minima per salvare (0-100)
+    minQuality      : 55,    // qualità minima per salvare (0-100)
     hrMin           : 35,    // bpm minimo fisiologico
     hrMax           : 140,   // bpm massimo fisiologico
     rrMin           : 300,   // ms — RR minimo (200 bpm)
@@ -514,9 +515,9 @@ const App = (() => {
     filterLow       : 0.7,   // Hz — taglio alto-passa
     filterHigh      : 4.0,   // Hz — taglio basso-passa
     detrendWindow   : 2.0,   // secondi — finestra detrending
-    flatThresh      : 3,     // std dev sotto cui il segnale è piatto
-    satThresh       : 248,   // media canale rosso > questo = saturato
-    peakThreshMult  : 0.5,   // moltiplicatore soglia picchi
+    flatThresh      : 0.12,  // AC/DC % sotto cui il segnale è piatto
+    satThresh       : 252,   // media canale > questo = saturato
+    peakThreshMult  : 0.35,  // moltiplicatore soglia picchi
     baselineDays    : 7,     // giorni minimi per baseline
   };
 
@@ -731,37 +732,55 @@ const App = (() => {
      SQ — Signal Quality assessment
      ------------------------------------------------------------------- */
   const SQ = {
-    /* Qualità live durante la registrazione (feedback rapido) */
-    live (buf) {
-      if (buf.length < 20) return { score: 0, msg: 'Attendere…' };
-      const w = buf.slice(-60);
-      const sd = DSP.std(w);
+    /* Analisi robusta del segnale: usa AC/DC invece della sola deviazione standard grezza */
+    assess (buf) {
+      if (!buf || buf.length < 30) return { score:0, msg:'Attendere stabilizzazione…', acdc:0, mean:0 };
+
+      const w = buf.slice(-150);
       const mn = DSP.mean(w);
-      if (sd < CFG.flatThresh)  return { score: 5,  msg: '⚠ Dito non rilevato — posiziona meglio' };
-      if (mn > CFG.satThresh)   return { score: 35, msg: '⚠ Troppa pressione — premi più leggero' };
-      const sc = Math.min(95, Math.round(40 + Math.min(sd / 15, 1) * 55));
-      const msg = sc > 72 ? '✓ Segnale buono — tieni fermo' : '〜 Segnale debole — allinea il dito';
-      return { score: sc, msg };
+      const centered = w.map(v => v - mn);
+      const sd = DSP.std(centered);
+      const acdc = mn > 1 ? (sd / Math.abs(mn)) * 100 : 0;
+      let lo = Infinity, hi = -Infinity;
+      for (const v of w) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      const rangePct = mn > 1 ? ((hi - lo) / Math.abs(mn)) * 100 : 0;
+
+      if (mn < 8)       return { score:8,  msg:'⚠ Troppo buio — la luce non arriva al sensore', acdc, mean:mn };
+      if (mn > CFG.satThresh) return { score:25, msg:'⚠ Segnale saturo — alleggerisci pressione o riduci luce', acdc, mean:mn };
+      if (acdc < CFG.flatThresh) return { score:22, msg:'⚠ Pulsazione debole — sposta leggermente dito o luce', acdc, mean:mn };
+      if (rangePct > 12) return { score:35, msg:'⚠ Segnale instabile — dito/lampada si muovono o pressione variabile', acdc, mean:mn };
+
+      const pulseScore = Math.min(50, Math.round((acdc / 0.9) * 50));
+      const stabilityScore = rangePct < 5 ? 25 : rangePct < 8 ? 15 : 8;
+      const lightScore = (mn >= 25 && mn <= 235) ? 20 : 10;
+      const score = Math.max(0, Math.min(95, 10 + pulseScore + stabilityScore + lightScore));
+      const msg = score >= 70 ? '✓ Segnale buono — tieni fermo' :
+                  score >= 50 ? '〜 Segnale utilizzabile — resta immobile' :
+                                '⚠ Segnale debole — prova a spostare dito/luce';
+      return { score, msg, acdc, mean:mn };
     },
 
-    /* Qualità finale della misura (post-processing) */
+    /* Qualità live durante la registrazione */
+    live (buf, label = '') {
+      const a = this.assess(buf);
+      const suffix = label ? ` · ${label}` : '';
+      return { score:a.score, msg:a.msg + suffix };
+    },
+
+    /* Qualità finale della misura */
     final (raw, peaks, cleanRR, rr) {
       let score = 100;
       const issues = [];
       if (!raw || raw.length < 15) return { score:0, issues:['Segnale troppo corto'] };
 
-      const sd = DSP.std(raw);
-      const mn = DSP.mean(raw);
+      const a = this.assess(raw);
+      if (a.score < 30) return { score:a.score, issues:['Segnale luminoso troppo debole o instabile'] };
 
-      if (sd < CFG.flatThresh)
-        return { score:0, issues:['Dito non posizionato correttamente'] };
-
-      if (mn > CFG.satThresh)   { score -= 30; issues.push('Pressione troppo forte sul sensore'); }
-      if (peaks.length < 25)    { score -= 40; issues.push('Troppi pochi battiti rilevati'); }
+      if (peaks.length < 25) { score -= 35; issues.push('Troppi pochi battiti rilevati'); }
 
       if (rr.length > 0 && cleanRR.length > 0) {
         const artPct = (1 - cleanRR.length / rr.length) * 100;
-        if (artPct > 20) { score -= artPct * 0.8; issues.push('Movimento eccessivo durante la misura'); }
+        if (artPct > 25) { score -= artPct * 0.7; issues.push('Movimento/artefatti durante la misura'); }
       }
 
       if (cleanRR.length > 0) {
@@ -770,6 +789,7 @@ const App = (() => {
           { score -= 45; issues.push('Frequenza cardiaca fuori range fisiologico'); }
       }
 
+      score = Math.min(score, Math.max(45, a.score + 12));
       return { score: Math.max(0, Math.round(score)), issues };
     }
   };
@@ -833,9 +853,15 @@ const App = (() => {
     ppgCtx    : null,
     rafId     : null,
     timerInt  : null,
-    rawBuf    : [],   // valori canale rosso
+    rawBuf    : [],   // segnale scelto automaticamente
+    rBuf      : [],   // canale rosso
+    gBuf      : [],   // canale verde
+    bBuf      : [],   // canale blu
+    nBuf      : [],   // verde normalizzato su luminanza
     tsArr     : [],   // timestamp ms dall'inizio
     t0        : 0,
+    activeChannel : 'green',
+    warmupTimer : null,
     mode      : 'auto',
     manualCandidates : [],
     manualCamIndex   : 0,
@@ -883,6 +909,55 @@ const App = (() => {
         vid.play().catch(() => {});
         setTimeout(resolve, 2000);
       });
+    },
+
+    _resetBuffers () {
+      this.rawBuf = [];
+      this.rBuf   = [];
+      this.gBuf   = [];
+      this.bBuf   = [];
+      this.nBuf   = [];
+      this.tsArr  = [];
+      this.activeChannel = 'green';
+    },
+
+    _extractChannels (px) {
+      let rSum = 0, gSum = 0, bSum = 0, n = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i], g = px[i+1], b = px[i+2];
+        /* scarta solo pixel estremi: aiutano a ridurre riflessi e bordo dito */
+        if ((r + g + b) < 6) continue;
+        rSum += r; gSum += g; bSum += b; n++;
+      }
+      if (!n) return { r:0, g:0, b:0, norm:0 };
+      const r = rSum / n;
+      const g = gSum / n;
+      const b = bSum / n;
+      const lum = Math.max(1, (r + g + b) / 3);
+      const norm = (g / lum) * 100;
+      return { r, g, b, norm };
+    },
+
+    _chooseBestSignal (live = false) {
+      const candidates = [
+        { id:'norm',  label:'stabilizzato', buf:this.nBuf },
+        { id:'green', label:'verde',        buf:this.gBuf },
+        { id:'red',   label:'rosso',        buf:this.rBuf },
+        { id:'blue',  label:'blu',          buf:this.bBuf }
+      ].filter(c => c.buf && c.buf.length >= (live ? 30 : 60));
+
+      if (!candidates.length) return { id:'green', label:'verde', buf:this.gBuf.length ? this.gBuf : this.rawBuf };
+
+      let best = candidates[0];
+      let bestScore = -1;
+      for (const c of candidates) {
+        const a = SQ.assess(live ? c.buf.slice(-150) : c.buf);
+        let score = a.score;
+        if (c.id === 'norm') score += 6;   // riduce i cambi automatici di esposizione
+        if (c.id === 'green') score += 3;  // spesso è il canale PPG più pulito
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+      return best;
     },
 
     async _openFrontScreenLightCamera () {
@@ -1054,10 +1129,10 @@ const App = (() => {
       const wasAcquiring = !!(this.timerInt || this.rafId);
 
       if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; }
+      if (this.warmupTimer) { clearTimeout(this.warmupTimer); this.warmupTimer = null; }
       if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
 
-      this.rawBuf = [];
-      this.tsArr  = [];
+      this._resetBuffers();
       document.getElementById('timer-num').textContent = CFG.measureDuration;
       document.getElementById('q-fill').style.width = '0%';
       document.getElementById('q-num').textContent = '--';
@@ -1102,13 +1177,13 @@ const App = (() => {
 
     _startAcquisition (vid) {
       document.getElementById('manual-cycle-live-btn').style.display = this.mode === 'manualTorch' ? '' : 'none';
-      this.rawBuf = [];
-      this.tsArr  = [];
-      this.t0     = performance.now();
+      this._resetBuffers();
 
-      /* Canvas cattura (64×64 — bassa risoluzione, alta velocità) */
+      if (this.warmupTimer) { clearTimeout(this.warmupTimer); this.warmupTimer = null; }
+
+      /* Canvas cattura: un po' più grande + ROI centrale più ampia = meno sensibile a micro-spostamenti */
       this.capCanvas = document.createElement('canvas');
-      this.capCanvas.width = this.capCanvas.height = 64;
+      this.capCanvas.width = this.capCanvas.height = 96;
       this.capCtx = this.capCanvas.getContext('2d', {willReadFrequently:true});
 
       /* Canvas PPG waveform */
@@ -1117,17 +1192,28 @@ const App = (() => {
       this.ppgCanvas.height = this.ppgCanvas.offsetHeight || 100;
       this.ppgCtx = this.ppgCanvas.getContext('2d');
 
-      /* Timer countdown */
-      let rem = CFG.measureDuration;
-      document.getElementById('timer-num').textContent = rem;
-      this.timerInt = setInterval(() => {
-        rem--;
-        document.getElementById('timer-num').textContent = rem;
-        if (rem <= 0) { clearInterval(this.timerInt); this.stop(false); }
-      }, 1000);
+      document.getElementById('timer-num').textContent = CFG.measureDuration;
+      document.getElementById('q-num').textContent = '--';
+      document.getElementById('q-fill').style.width = '0%';
+      document.getElementById('status-msg').textContent =
+        `Stabilizzazione ${CFG.warmupDuration}s — trova luce e pressione giuste…`;
 
-      /* Loop di cattura */
-      this._captureLoop(vid);
+      this.warmupTimer = setTimeout(() => {
+        if (!this.stream?.active) return;
+        this._resetBuffers();
+        this.t0 = performance.now();
+        document.getElementById('status-msg').textContent = '✓ Acquisizione avviata — non muovere il dito';
+
+        let rem = CFG.measureDuration;
+        document.getElementById('timer-num').textContent = rem;
+        this.timerInt = setInterval(() => {
+          rem--;
+          document.getElementById('timer-num').textContent = rem;
+          if (rem <= 0) { clearInterval(this.timerInt); this.stop(false); }
+        }, 1000);
+
+        this._captureLoop(vid);
+      }, CFG.warmupDuration * 1000);
     },
 
     async _openBestCamera () {
@@ -1193,8 +1279,7 @@ const App = (() => {
       document.getElementById('manual-torch-panel').style.display = 'none';
       document.getElementById('manual-cycle-live-btn').style.display = 'none';
       this.mode = mode;
-      this.rawBuf = [];
-      this.tsArr  = [];
+      this._resetBuffers();
       this.t0     = performance.now();
       this.manualCandidates = [];
       this.manualCamIndex = 0;
@@ -1274,20 +1359,25 @@ const App = (() => {
         if (!this.stream?.active) return;
 
         try {
-          /* Disegna frame ridotto e leggi ROI centrale (32×32) */
-          this.capCtx.drawImage(vid, 0, 0, 64, 64);
-          const px = this.capCtx.getImageData(16, 16, 32, 32).data;
+          /* Disegna frame ridotto e leggi ROI centrale ampia (64×64) */
+          this.capCtx.drawImage(vid, 0, 0, 96, 96);
+          const px = this.capCtx.getImageData(16, 16, 64, 64).data;
 
-          let rSum = 0, n = 0;
-          for (let i = 0; i < px.length; i += 4) { rSum += px[i]; n++; }
-          const val = n ? rSum / n : 0;
+          const ch = this._extractChannels(px);
+          this.rBuf.push(ch.r);
+          this.gBuf.push(ch.g);
+          this.bBuf.push(ch.b);
+          this.nBuf.push(ch.norm);
 
           const now = performance.now() - this.t0;
-          this.rawBuf.push(val);
           this.tsArr.push(now);
 
+          const best = this._chooseBestSignal(true);
+          this.activeChannel = best.id;
+          this.rawBuf = best.buf;
+
           /* Feedback qualità ogni ~10 frame */
-          if (this.rawBuf.length % 10 === 0) this._updateLiveUI();
+          if (this.tsArr.length % 10 === 0) this._updateLiveUI();
 
           /* Disegna waveform */
           this._drawWaveform();
@@ -1299,7 +1389,10 @@ const App = (() => {
     },
 
     _updateLiveUI () {
-      const {score, msg} = SQ.live(this.rawBuf);
+      const best = this._chooseBestSignal(true);
+      this.rawBuf = best.buf;
+      this.activeChannel = best.id;
+      const {score, msg} = SQ.live(this.rawBuf, best.label);
       const fill = document.getElementById('q-fill');
       fill.style.width = score + '%';
       fill.style.background = score > 70 ? 'var(--green)' : score > 40 ? 'var(--yellow)' : 'var(--red)';
@@ -1336,6 +1429,7 @@ const App = (() => {
 
     stop (cancelled) {
       clearInterval(this.timerInt);
+      if (this.warmupTimer) { clearTimeout(this.warmupTimer); this.warmupTimer = null; }
       if (this.rafId) cancelAnimationFrame(this.rafId);
       if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
       document.body.classList.remove('screen-light-mode');
@@ -1344,7 +1438,7 @@ const App = (() => {
 
       this._resetUI();
 
-      if (cancelled || this.rawBuf.length < 60) {
+      if (cancelled || this.tsArr.length < 60) {
         // Naviga solo se il router non ha già cambiato schermata (evita ricorsione)
         if (App.router.current === 'measure') App.router.go('home');
         return;
@@ -1365,6 +1459,7 @@ const App = (() => {
           rmssd    : result.rmssd,
           lnRmssd  : result.lnRmssd,
           sdnn     : result.sdnn,
+          channel  : result.channel,
           beatsDetected : result.beatsDetected,
           beatsValid    : result.beatsValid,
           artifactPct   : result.artifactPct,
@@ -1377,9 +1472,10 @@ const App = (() => {
     },
 
     _process () {
-      const raw = this.rawBuf;
+      const best = this._chooseBestSignal(false);
+      const raw = best.buf;
       const ts  = this.tsArr;
-      if (raw.length < 30) return { valid:false, quality:0, issues:['Segnale troppo corto'] };
+      if (!raw || raw.length < 30 || ts.length < 30) return { valid:false, quality:0, issues:['Segnale troppo corto'] };
 
       /* fs reale dai timestamp */
       const totalMs = ts[ts.length-1] - ts[0];
@@ -1409,6 +1505,7 @@ const App = (() => {
         rmssd         : metrics?.rmssd  ?? null,
         lnRmssd       : metrics?.lnRmssd ?? null,
         sdnn          : metrics?.sdnn    ?? null,
+        channel       : best.label
       };
     },
 
