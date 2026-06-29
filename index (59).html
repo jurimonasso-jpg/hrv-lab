@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#080808">
+<title>HRV Lab</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/* =========================================================
+   TOKENS
+   ========================================================= */
+:root {
+  --bg:        #080808;
+  --surface:   #111111;
+  --card:      #1a1a1a;
+  --card2:     #222222;
+  --border:    #282828;
+  --text:      #f0f0f0;
+  --dim:       #666;
+  --dim2:      #999;
+  --accent:    #00d4aa;
+  --accent-lo: rgba(0,212,170,.10);
+  --accent-md: rgba(0,212,170,.22);
+  --green:     #22c55e;
+  --green-lo:  rgba(34,197,94,.12);
+  --green-bd:  rgba(34,197,94,.30);
+  --yellow:    #f59e0b;
+  --yellow-lo: rgba(245,158,11,.12);
+  --yellow-bd: rgba(245,158,11,.30);
+  --red:       #ef4444;
+  --red-lo:    rgba(239,68,68,.12);
+  --red-bd:    rgba(239,68,68,.30);
+  --nav:       60px;
+  --r:         14px;
+}
+
+/* =========================================================
+   RESET + BASE
+   ========================================================= */
+*, *::before, *::after { box-sizing: border-box; margin:0; padding:0; }
+html { height:100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  height: 100%;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+input, select, textarea { font-family: inherit; }
+* { -webkit-tap-highlight-color: transparent; }
+
+/* =========================================================
+   LAYOUT
+   ========================================================= */
+#app { display:flex; flex-direction:column; height:100vh; }
+#main {
+  flex:1; overflow-y:auto; overflow-x:hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(var(--nav) + 8px);
+  scroll-behavior: smooth;
+}
+
+/* =========================================================
+   BOTTOM NAV
+   ========================================================= */
+#nav {
+  position:fixed; bottom:0; left:0; right:0;
+  height: var(--nav);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display:flex; align-items:stretch; justify-content:space-around;
+  z-index:200;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.nb {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:3px; flex:1;
+  border:none; background:none; color:var(--dim); font-size:10px; font-weight:500;
+  padding:6px 0; transition: color .15s;
+  letter-spacing:.02em;
+}
+.nb svg { width:22px; height:22px; stroke-width:1.8; }
+.nb.active { color:var(--accent); }
+
+/* =========================================================
+   SCREENS
+   ========================================================= */
+.screen { display:none; padding:16px 16px 8px; min-height:calc(100vh - var(--nav)); animation: fadeIn .18s ease; }
+.screen.active { display:block; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+/* =========================================================
+   TYPOGRAPHY HELPERS
+   ========================================================= */
+.page-title { font-size:24px; font-weight:700; letter-spacing:-.02em; }
+.page-sub   { font-size:13px; color:var(--dim2); margin-top:2px; }
+.section-label {
+  font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--dim); margin-bottom:8px; margin-top:4px;
+}
+
+/* =========================================================
+   CARDS
+   ========================================================= */
+.card {
+  background: var(--card);
+  border:1px solid var(--border);
+  border-radius: var(--r);
+  padding:16px;
+  margin-bottom:10px;
+}
+.card-sm { padding:12px 14px; }
+
+/* =========================================================
+   METRIC TILES
+   ========================================================= */
+.metrics-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+.metric-tile {
+  background: var(--card);
+  border:1px solid var(--border);
+  border-radius: var(--r);
+  padding:14px 12px;
+  text-align:center;
+}
+.metric-val {
+  font-size:30px; font-weight:700; letter-spacing:-.03em;
+  font-variant-numeric: tabular-nums; line-height:1;
+}
+.metric-val sup { font-size:13px; font-weight:500; color:var(--dim2); vertical-align:super; }
+.metric-lbl { font-size:11px; color:var(--dim); margin-top:4px; }
+.metric-arrow { font-size:16px; margin-left:4px; }
+.arrow-up   { color:var(--green); }
+.arrow-down { color:var(--red); }
+.arrow-flat { color:var(--dim); }
+
+/* =========================================================
+   READINESS BADGE
+   ========================================================= */
+.readiness-badge {
+  display:flex; flex-direction:column; align-items:center;
+  padding:24px 20px; border-radius: var(--r);
+  margin-bottom:10px; gap:8px;
+  border:1px solid;
+}
+.readiness-badge.green { background:var(--green-lo); border-color:var(--green-bd); }
+.readiness-badge.yellow { background:var(--yellow-lo); border-color:var(--yellow-bd); }
+.readiness-badge.red { background:var(--red-lo); border-color:var(--red-bd); }
+
+.rd-orb { width:52px; height:52px; border-radius:50%; }
+.rd-orb.green { background:var(--green); box-shadow:0 0 22px rgba(34,197,94,.5); }
+.rd-orb.yellow { background:var(--yellow); box-shadow:0 0 22px rgba(245,158,11,.5); }
+.rd-orb.red { background:var(--red); box-shadow:0 0 22px rgba(239,68,68,.5); }
+
+.rd-label { font-size:17px; font-weight:700; }
+.rd-label.green { color:var(--green); }
+.rd-label.yellow { color:var(--yellow); }
+.rd-label.red { color:var(--red); }
+.rd-desc { font-size:13px; color:var(--dim2); text-align:center; line-height:1.4; }
+
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+.btn {
+  display:block; width:100%; padding:15px 20px;
+  border:none; border-radius:12px;
+  font-size:16px; font-weight:600; letter-spacing:.01em;
+  transition:opacity .12s, transform .08s;
+  text-align:center;
+}
+.btn:active { opacity:.78; transform:scale(.98); }
+.btn-primary { background:var(--accent); color:#000; }
+.btn-secondary { background:var(--card2); color:var(--text); border:1px solid var(--border); }
+.btn-danger { background:var(--red); color:#fff; }
+.btn-sm { padding:10px 16px; font-size:14px; border-radius:10px; }
+.btn-measure {
+  background:var(--accent); color:#000;
+  font-size:18px; padding:20px;
+  border-radius:50px; letter-spacing:.04em;
+  box-shadow: 0 0 32px rgba(0,212,170,.28);
+}
+.btn + .btn { margin-top:10px; }
+
+/* =========================================================
+   MEASURE SCREEN
+   ========================================================= */
+#measure-screen { padding:0; }
+.measure-wrap {
+  min-height:calc(100vh - var(--nav));
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  padding:24px 20px; gap:16px;
+}
+.instructions-list { background:var(--surface); border-radius:var(--r); padding:16px; width:100%; }
+.step { display:flex; align-items:flex-start; gap:12px; margin-bottom:12px; font-size:14px; color:var(--dim2); }
+.step:last-child { margin-bottom:0; }
+.step-n {
+  width:24px; height:24px; border-radius:50%; background:var(--accent);
+  color:#000; font-size:11px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px;
+}
+/* recording UI */
+.camera-ring-wrap { position:relative; display:flex; align-items:center; justify-content:center; }
+video#cam {
+  width:130px; height:130px; border-radius:50%;
+  object-fit:cover; border:3px solid var(--accent); background:#000;
+}
+.pulse-ring {
+  position:absolute; width:146px; height:146px; border-radius:50%;
+  border:2px solid rgba(0,212,170,.3);
+  animation: pulse 2s ease-in-out infinite;
+  pointer-events:none;
+}
+@keyframes pulse { 0%,100%{transform:scale(1);opacity:.3} 50%{transform:scale(1.06);opacity:.7} }
+
+.timer-ring {
+  width:110px; height:110px; border-radius:50%;
+  background:var(--surface); border:3px solid var(--accent);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+}
+.timer-num { font-size:34px; font-weight:700; font-variant-numeric:tabular-nums; }
+.timer-lbl { font-size:11px; color:var(--dim); }
+
+.quality-wrap { width:100%; }
+.quality-row { display:flex; justify-content:space-between; font-size:12px; margin-bottom:5px; }
+.quality-track { height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+.quality-fill { height:100%; border-radius:3px; width:0%; transition:width .3s, background .3s; }
+
+.ppg-wrap {
+  width:100%; height:100px;
+  background:var(--card); border:1px solid var(--border);
+  border-radius:10px; overflow:hidden;
+}
+canvas#ppg-cv { width:100%; height:100%; display:block; }
+.status-msg { font-size:13px; color:var(--dim); text-align:center; min-height:38px; }
+
+/* =========================================================
+   CHECK-IN
+   ========================================================= */
+.ci-item { margin-bottom:20px; }
+.ci-label { display:flex; justify-content:space-between; align-items:center; font-size:14px; margin-bottom:8px; }
+.ci-val { font-weight:700; color:var(--accent); font-size:16px; }
+
+input[type=range] {
+  width:100%; -webkit-appearance:none;
+  height:6px; background:var(--border); border-radius:3px; outline:none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:24px; height:24px;
+  border-radius:50%; background:var(--accent); cursor:pointer;
+  box-shadow: 0 0 8px rgba(0,212,170,.4);
+}
+.intensity-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.int-btn {
+  padding:10px 6px; border-radius:10px;
+  border:1px solid var(--border);
+  background:var(--card); color:var(--dim2); font-size:12px;
+  text-align:center; transition: all .12s;
+}
+.int-btn.sel { border-color:var(--accent); color:var(--accent); background:var(--accent-lo); }
+textarea {
+  width:100%; padding:12px;
+  background:var(--card2); border:1px solid var(--border);
+  border-radius:10px; color:var(--text); font-size:14px; resize:none;
+  line-height:1.5;
+}
+
+/* =========================================================
+   CHARTS / TRENDS
+   ========================================================= */
+.chart-wrap { width:100%; height:180px; margin:4px 0 8px; }
+.filter-row { display:flex; gap:8px; margin-bottom:12px; }
+.ftab {
+  padding:6px 16px; border-radius:20px;
+  border:1px solid var(--border); background:transparent;
+  color:var(--dim); font-size:13px; transition: all .12s;
+}
+.ftab.active { background:var(--accent); color:#000; border-color:var(--accent); }
+
+/* =========================================================
+   HISTORY
+   ========================================================= */
+.h-item {
+  display:flex; align-items:center; gap:12px;
+  padding:12px 14px; background:var(--card);
+  border:1px solid var(--border); border-radius:var(--r); margin-bottom:8px;
+}
+.h-dot { width:11px; height:11px; border-radius:50%; flex-shrink:0; }
+.h-dot.green { background:var(--green); }
+.h-dot.yellow { background:var(--yellow); }
+.h-dot.red { background:var(--red); }
+.h-date { font-size:14px; font-weight:600; }
+.h-meta { font-size:12px; color:var(--dim); }
+.h-q { font-size:12px; color:var(--dim); margin-left:auto; flex-shrink:0; }
+
+/* =========================================================
+   SETTINGS
+   ========================================================= */
+.setting-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:15px 0; border-bottom:1px solid var(--border);
+}
+.setting-row:last-child { border-bottom:none; }
+.setting-lbl { font-size:15px; }
+.setting-sub { font-size:12px; color:var(--dim); margin-top:2px; }
+select {
+  background:var(--card2); border:1px solid var(--border);
+  color:var(--text); padding:6px 10px; border-radius:8px; font-size:14px;
+}
+
+/* =========================================================
+   MISC
+   ========================================================= */
+.baseline-note {
+  font-size:13px; color:var(--yellow);
+  background:var(--yellow-lo); border:1px solid var(--yellow-bd);
+  padding:10px 14px; border-radius:10px; margin-bottom:10px;
+}
+.empty-state {
+  text-align:center; padding:64px 20px; color:var(--dim);
+}
+.empty-icon { font-size:52px; margin-bottom:12px; }
+.empty-title { font-size:16px; font-weight:600; color:var(--dim2); margin-bottom:6px; }
+.empty-desc { font-size:13px; }
+.header-row {
+  display:flex; align-items:flex-start; justify-content:space-between;
+  margin-bottom:16px; padding-top:8px;
+}
+.disclaimer {
+  font-size:11px; color:var(--dim); line-height:1.6;
+  text-align:center; padding:4px 0;
+}
+.baseline-row {
+  display:flex; justify-content:space-around; font-size:13px;
+  padding-top:10px; border-top:1px solid var(--border); margin-top:10px;
+}
+.bl-item { text-align:center; }
+.bl-val { font-size:18px; font-weight:700; }
+.bl-lbl { font-size:10px; color:var(--dim); }
+</style>
+</head>
+<body>
+<div id="app">
+  <main id="main">
+
+    <!-- ===== HOME ===== -->
+    <div id="home-screen" class="screen active">
+      <div id="home-content"></div>
+    </div>
+
+    <!-- ===== MEASURE ===== -->
+    <div id="measure-screen" class="screen">
+      <div class="measure-wrap">
+
+        <!-- Phase 1: instructions -->
+        <div id="ph-instructions" style="width:100%">
+          <div class="header-row" style="justify-content:center">
+            <div style="text-align:center">
+              <div class="page-title">HRV Lab</div>
+              <div class="page-sub">Misurazione quotidiana</div>
+            </div>
+          </div>
+          <div id="https-warn" style="display:none;font-size:12px;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:10px 13px;margin-bottom:10px;line-height:1.5">
+            ⚠️ <b>Richiede HTTPS.</b> Apri il file tramite GitHub Pages o un server locale, non direttamente da file://.
+          </div>
+          <div class="instructions-list">
+            <div class="step"><span class="step-n">1</span><span>Siediti in modo rilassato, schiena appoggiata</span></div>
+            <div class="step"><span class="step-n">2</span><span>Appoggia il dito indice sulla fotocamera posteriore + flash</span></div>
+            <div class="step"><span class="step-n">3</span><span>Pressione <b>leggera</b> — non schiacciare il sensore</span></div>
+            <div class="step"><span class="step-n">4</span><span>Respira normalmente, non muovere il dito per 60 secondi</span></div>
+            <div class="step"><span class="step-n">5</span><span>Ideale: mattina prima di caffè e allenamento</span></div>
+          </div>
+          <br>
+          <button class="btn btn-measure" onclick="App.ppg.start()">▶ Inizia misurazione</button>
+          <br>
+          <button class="btn btn-secondary" onclick="App.router.go('home')" style="margin-top:10px">Annulla</button>
+        </div>
+
+        <!-- Phase 2: recording -->
+        <div id="ph-recording" style="display:none;width:100%">
+          <div class="camera-ring-wrap" style="margin-bottom:8px">
+            <video id="cam" autoplay playsinline muted></video>
+            <div class="pulse-ring"></div>
+          </div>
+          <div class="timer-ring">
+            <span class="timer-num" id="timer-num">60</span>
+            <span class="timer-lbl">secondi</span>
+          </div>
+          <div class="quality-wrap" style="width:100%">
+            <div class="quality-row">
+              <span>Qualità segnale</span>
+              <span id="q-num" style="font-weight:600">--</span>
+            </div>
+            <div class="quality-track"><div class="quality-fill" id="q-fill"></div></div>
+          </div>
+          <div class="ppg-wrap"><canvas id="ppg-cv"></canvas></div>
+          <div class="status-msg" id="status-msg">Attendere avvio acquisizione…</div>
+          <button class="btn btn-danger btn-sm" onclick="App.ppg.stop(true)" style="width:100%">✕ Annulla misurazione</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ===== RESULT ===== -->
+    <div id="result-screen" class="screen">
+      <div id="result-content"></div>
+    </div>
+
+    <!-- ===== CHECKIN ===== -->
+    <div id="checkin-screen" class="screen">
+      <div id="checkin-content"></div>
+    </div>
+
+    <!-- ===== TRENDS ===== -->
+    <div id="trends-screen" class="screen">
+      <div id="trends-content"></div>
+    </div>
+
+    <!-- ===== HISTORY ===== -->
+    <div id="history-screen" class="screen">
+      <div id="history-content"></div>
+    </div>
+
+    <!-- ===== SETTINGS ===== -->
+    <div id="settings-screen" class="screen">
+      <div id="settings-content"></div>
+    </div>
+
+  </main>
+
+  <!-- BOTTOM NAV -->
+  <nav id="nav">
+    <button class="nb active" data-s="home" onclick="App.router.go('home')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Home
+    </button>
+    <button class="nb" data-s="measure" onclick="App.router.go('measure')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Misura
+    </button>
+    <button class="nb" data-s="trends" onclick="App.router.go('trends')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Trend
+    </button>
+    <button class="nb" data-s="history" onclick="App.router.go('history')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Storico
+    </button>
+    <button class="nb" data-s="settings" onclick="App.router.go('settings')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Impost.
+    </button>
+  </nav>
+</div>
+
+<script>
+/* =====================================================================
+   HRV LAB — v1.0
+   Stack: Single-file HTML · localStorage · getUserMedia PPG · Chart.js
+   Struttura: CFG → DB → DSP → SQ → Readiness → PPG → UI → Router → App
+   ===================================================================== */
+
+const App = (() => {
+
+  /* -------------------------------------------------------------------
+     CONFIG — modifica qui le soglie
+     ------------------------------------------------------------------- */
+  const CFG = {
+    measureDuration : 60,    // secondi misura
+    minDuration     : 45,    // secondi minimi validi
+    minBeats        : 35,    // battiti minimi validi
+    minQuality      : 70,    // qualità minima per salvare (0-100)
+    hrMin           : 35,    // bpm minimo fisiologico
+    hrMax           : 140,   // bpm massimo fisiologico
+    rrMin           : 300,   // ms — RR minimo (200 bpm)
+    rrMax           : 2000,  // ms — RR massimo (30 bpm)
+    filterLow       : 0.7,   // Hz — taglio alto-passa
+    filterHigh      : 4.0,   // Hz — taglio basso-passa
+    detrendWindow   : 2.0,   // secondi — finestra detrending
+    flatThresh      : 3,     // std dev sotto cui il segnale è piatto
+    satThresh       : 248,   // media canale rosso > questo = saturato
+    peakThreshMult  : 0.5,   // moltiplicatore soglia picchi
+    baselineDays    : 7,     // giorni minimi per baseline
+  };
+
+  /* -------------------------------------------------------------------
+     DB — localStorage wrapper
+     ------------------------------------------------------------------- */
+  const DB = {
+    KEY  : 'hrv_lab_v1',
+    SKEY : 'hrv_lab_settings',
+
+    load () {
+      try { return JSON.parse(localStorage.getItem(this.KEY) || '[]'); }
+      catch { return []; }
+    },
+    save (records) {
+      try { localStorage.setItem(this.KEY, JSON.stringify(records)); } catch {}
+    },
+    add (rec) {
+      const r = this.load();
+      r.unshift(rec);
+      this.save(r);
+    },
+    updateFirst (patch) {
+      const r = this.load();
+      if (r.length) { Object.assign(r[0], patch); this.save(r); }
+    },
+    settings () {
+      try { return JSON.parse(localStorage.getItem(this.SKEY) || '{}'); }
+      catch { return {}; }
+    },
+    saveSetting (k, v) {
+      const s = this.settings();
+      s[k] = v;
+      try { localStorage.setItem(this.SKEY, JSON.stringify(s)); } catch {}
+    },
+    clearAll () {
+      try { localStorage.removeItem(this.KEY); } catch {}
+    },
+
+    /* Baseline calcolata dinamicamente dai record più recenti */
+    baseline (days = 7) {
+      const all = this.load().filter(r => r.valid && r.lnRmssd != null);
+      if (all.length < 2) return null;
+      const cutoff = Date.now() - days * 86_400_000;
+      let use = all.filter(r => r.ts >= cutoff);
+      if (use.length < 3) use = all.slice(0, Math.min(all.length, 14));
+      if (use.length < 2) return null;
+      const mean = a => a.reduce((s,v) => s+v, 0) / a.length;
+      const std  = a => { const m = mean(a); return Math.sqrt(a.reduce((s,v) => s+(v-m)**2, 0)/a.length); };
+      const ln = use.map(r => r.lnRmssd);
+      const hr = use.map(r => r.hr);
+      return {
+        lnRmssd   : mean(ln),
+        lnRmssdSd : std(ln),
+        hr        : mean(hr),
+        hrSd      : std(hr),
+        n         : use.length
+      };
+    },
+
+    exportCSV () {
+      const rows = this.load();
+      if (!rows.length) { alert('Nessun dato da esportare.'); return; }
+      const hdr = ['data','ora','hr','rmssd','lnRmssd','sdnn','qualita','battiti_validi',
+                   'artefatti_pct','readiness','sonno','stress','stanchezza','dolore',
+                   'voglia','allenamento_ieri','note'].join(',');
+      const lines = rows.map(r => {
+        const d = new Date(r.ts);
+        return [
+          d.toLocaleDateString('it-IT'), d.toLocaleTimeString('it-IT'),
+          r.hr?.toFixed(1)||'', r.rmssd?.toFixed(1)||'', r.lnRmssd?.toFixed(2)||'',
+          r.sdnn?.toFixed(1)||'', r.quality||'', r.beatsValid||'', r.artifactPct||'',
+          r.readiness?.color||'', r.checkin?.sleep||'', r.checkin?.stress||'',
+          r.checkin?.muscle||'', r.checkin?.pain||'', r.checkin?.motivation||'',
+          r.checkin?.intensity||'', (r.checkin?.notes||'').replace(/,/g,';')
+        ].join(',');
+      });
+      const blob = new Blob([hdr+'\n'+lines.join('\n')], {type:'text/csv'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `hrv_lab_${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     DSP — elaborazione segnale PPG
+     ------------------------------------------------------------------- */
+  const DSP = {
+
+    mean (a) { return a.reduce((s,v) => s+v, 0) / a.length; },
+
+    std (a) {
+      const m = this.mean(a);
+      return Math.sqrt(a.reduce((s,v) => s+(v-m)**2, 0) / a.length);
+    },
+
+    /* Sottrae la media mobile per rimuovere drift lento (baseline wander) */
+    detrend (signal, wSec, fs) {
+      const w = Math.max(3, Math.round(wSec * fs));
+      return signal.map((v,i) => {
+        const s = Math.max(0, i - Math.floor(w/2));
+        const e = Math.min(signal.length, i + Math.floor(w/2) + 1);
+        return v - this.mean(signal.slice(s, e));
+      });
+    },
+
+    /* Coefficienti filtro Butterworth IIR 2° ordine */
+    _bwLP (fc, fs) {
+      const K = Math.tan(Math.PI * fc / fs);
+      const n = 1 / (1 + Math.SQRT2*K + K*K);
+      return { b:[K*K*n, 2*K*K*n, K*K*n], a:[2*(K*K-1)*n, (1-Math.SQRT2*K+K*K)*n] };
+    },
+    _bwHP (fc, fs) {
+      const K = Math.tan(Math.PI * fc / fs);
+      const n = 1 / (1 + Math.SQRT2*K + K*K);
+      return { b:[n, -2*n, n], a:[2*(K*K-1)*n, (1-Math.SQRT2*K+K*K)*n] };
+    },
+
+    /* Applica filtro IIR in una direzione */
+    _applyIIR (sig, {b,a}) {
+      const o = new Float64Array(sig.length);
+      for (let i = 2; i < sig.length; i++) {
+        o[i] = b[0]*sig[i] + b[1]*sig[i-1] + b[2]*sig[i-2]
+              - a[0]*o[i-1] - a[1]*o[i-2];
+        if (!isFinite(o[i])) o[i] = 0;
+      }
+      return o;
+    },
+
+    /* Zero-phase filtering (forward + backward) */
+    filtfilt (sig, coef) {
+      const arr = Float64Array.from(sig);
+      const fwd = this._applyIIR(arr, coef);
+      const rev = this._applyIIR(fwd.slice().reverse(), coef).reverse();
+      return Array.from(rev).map((v,i) => isFinite(v) ? v : fwd[i]);
+    },
+
+    /* Passa-banda: HP poi LP */
+    bandpass (sig, fs, low = 0.7, high = 4.0) {
+      const hp = this.filtfilt(sig, this._bwHP(low, fs));
+      return this.filtfilt(hp, this._bwLP(high, fs));
+    },
+
+    /* Normalizza in [-1, 1] */
+    normalize (a) {
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] < mn) mn = a[i];
+        if (a[i] > mx) mx = a[i];
+      }
+      const r = mx - mn || 1;
+      return a.map(v => (v - mn) / r * 2 - 1);
+    },
+
+    /* Rilevamento picchi R (battiti) con soglia adattiva */
+    detectPeaks (sig, fs) {
+      const minDist = Math.floor(fs * 60 / CFG.hrMax); // campioni min tra picchi
+      const maxDist = Math.floor(fs * 60 / CFG.hrMin);
+
+      // Soglia = media dei valori positivi * moltiplicatore
+      const pos = sig.filter(v => v > 0);
+      const thr = pos.length ? this.mean(pos) * CFG.peakThreshMult : 0.15;
+
+      const peaks = [];
+      for (let i = 1; i < sig.length - 1; i++) {
+        if (sig[i] > thr && sig[i] >= sig[i-1] && sig[i] >= sig[i+1]) {
+          if (!peaks.length || i - peaks[peaks.length-1] >= minDist) {
+            peaks.push(i);
+          } else if (sig[i] > sig[peaks[peaks.length-1]]) {
+            // Stesso cluster, tieni il picco più alto
+            peaks[peaks.length-1] = i;
+          }
+        }
+      }
+      return peaks;
+    },
+
+    /* RR intervals in ms dai picchi e dalla timeline reale */
+    peaksToRR (peaks, timestamps) {
+      const rr = [];
+      for (let i = 1; i < peaks.length; i++) {
+        const dt = timestamps[peaks[i]] - timestamps[peaks[i-1]];
+        if (dt > 0) rr.push(dt);
+      }
+      return rr;
+    },
+
+    /* Rimuove RR fuori limiti fisiologici e outlier >30% dalla media */
+    cleanRR (rr) {
+      if (rr.length < 3) return rr;
+      let c = rr.filter(r => r >= CFG.rrMin && r <= CFG.rrMax);
+      if (c.length < 3) return c;
+      const m = this.mean(c);
+      return c.filter(r => Math.abs(r - m) / m < 0.30);
+    },
+
+    /* Calcolo metriche HRV */
+    calcHRV (cleanRR) {
+      if (cleanRR.length < 5) return null;
+      const m    = this.mean(cleanRR);
+      const hr   = 60000 / m;
+      const sdnn = this.std(cleanRR);
+      const diffs = cleanRR.slice(1).map((r,i) => r - cleanRR[i]);
+      const rmssd = Math.sqrt(this.mean(diffs.map(d => d*d)));
+      const lnRmssd = Math.log(rmssd);
+      return { hr, sdnn, rmssd, lnRmssd };
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     SQ — Signal Quality assessment
+     ------------------------------------------------------------------- */
+  const SQ = {
+    /* Qualità live durante la registrazione (feedback rapido) */
+    live (buf) {
+      if (buf.length < 20) return { score: 0, msg: 'Attendere…' };
+      const w = buf.slice(-60);
+      const sd = DSP.std(w);
+      const mn = DSP.mean(w);
+      if (sd < CFG.flatThresh)  return { score: 5,  msg: '⚠ Dito non rilevato — posiziona meglio' };
+      if (mn > CFG.satThresh)   return { score: 35, msg: '⚠ Troppa pressione — premi più leggero' };
+      const sc = Math.min(95, Math.round(40 + Math.min(sd / 15, 1) * 55));
+      const msg = sc > 72 ? '✓ Segnale buono — tieni fermo' : '〜 Segnale debole — allinea il dito';
+      return { score: sc, msg };
+    },
+
+    /* Qualità finale della misura (post-processing) */
+    final (raw, peaks, cleanRR, rr) {
+      let score = 100;
+      const issues = [];
+      if (!raw || raw.length < 15) return { score:0, issues:['Segnale troppo corto'] };
+
+      const sd = DSP.std(raw);
+      const mn = DSP.mean(raw);
+
+      if (sd < CFG.flatThresh)
+        return { score:0, issues:['Dito non posizionato correttamente'] };
+
+      if (mn > CFG.satThresh)   { score -= 30; issues.push('Pressione troppo forte sul sensore'); }
+      if (peaks.length < 25)    { score -= 40; issues.push('Troppi pochi battiti rilevati'); }
+
+      if (rr.length > 0 && cleanRR.length > 0) {
+        const artPct = (1 - cleanRR.length / rr.length) * 100;
+        if (artPct > 20) { score -= artPct * 0.8; issues.push('Movimento eccessivo durante la misura'); }
+      }
+
+      if (cleanRR.length > 0) {
+        const hr = 60000 / DSP.mean(cleanRR);
+        if (hr < CFG.hrMin || hr > CFG.hrMax)
+          { score -= 45; issues.push('Frequenza cardiaca fuori range fisiologico'); }
+      }
+
+      return { score: Math.max(0, Math.round(score)), issues };
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     READINESS — semaforo personale
+     ------------------------------------------------------------------- */
+  const Readiness = {
+    compute (hrv, checkin, baseline) {
+      if (!hrv) return { color:'yellow', label:'Nessun dato', desc:'Esegui una misurazione per vedere la readiness.' };
+
+      let score = 50; // partenza neutra
+
+      /* ── HRV vs baseline (peso principale) ── */
+      if (baseline && baseline.n >= 3) {
+        const dLn = (hrv.lnRmssd - baseline.lnRmssd) / Math.max(baseline.lnRmssdSd, 0.1);
+        score += dLn * 14;
+        const dHR = (baseline.hr - hrv.hr) / Math.max(baseline.hrSd, 2);
+        score += dHR * 8;
+      } else {
+        // Senza baseline solida, usa valori assoluti approssimativi
+        score += (hrv.lnRmssd - 3.5) * 10;
+      }
+
+      /* ── Check-in soggettivo ── */
+      if (checkin) {
+        score += (checkin.sleep  - 3) * 5;   // sonno: più = meglio
+        score -= (checkin.stress - 3) * 4;   // stress: più = peggio
+        score -= (checkin.muscle - 3) * 4;   // stanchezza: più = peggio
+        score -= (checkin.pain   - 3) * 5;   // dolore: più = peggio
+        score += (checkin.motivation - 3) * 2;
+        const pen = {rest:0, light:0, medium:-3, hard:-9, veryhard:-16, unknown:0};
+        score += pen[checkin.intensity] ?? 0;
+      }
+
+      score = Math.max(0, Math.min(100, score));
+
+      if (score >= 60) return {
+        color:'green', label:'Allenamento ok', score,
+        desc:'Oggi sei in linea con la tua norma personale. Puoi allenarti normalmente.'
+      };
+      if (score >= 35) return {
+        color:'yellow', label:'Prudenza', score,
+        desc:'Oggi sei leggermente sotto la tua norma. Riduci volume o intensità.'
+      };
+      return {
+        color:'red', label:'Riposo consigliato', score,
+        desc:'Oggi i dati suggeriscono prudenza. Mobilità, camminata o recupero attivo.'
+      };
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     PPG ENGINE — acquisizione e processing
+     ------------------------------------------------------------------- */
+  const PPG = {
+    stream    : null,
+    capCanvas : null,
+    capCtx    : null,
+    ppgCanvas : null,
+    ppgCtx    : null,
+    rafId     : null,
+    timerInt  : null,
+    rawBuf    : [],   // valori canale rosso
+    tsArr     : [],   // timestamp ms dall'inizio
+    t0        : 0,
+
+    async start () {
+      /* Reset UI */
+      document.getElementById('ph-instructions').style.display = 'none';
+      document.getElementById('ph-recording').style.display = '';
+      document.getElementById('status-msg').textContent = 'Avvio fotocamera…';
+      this.rawBuf = [];
+      this.tsArr  = [];
+      this.t0     = performance.now();
+
+      /* Verifica API disponibile */
+      if (!navigator.mediaDevices?.getUserMedia) {
+        document.getElementById('status-msg').textContent =
+          '⚠️ Fotocamera non supportata. Usa Chrome su Android via HTTPS (GitHub Pages).';
+        return;
+      }
+
+      /* Accesso fotocamera con fallback progressivo */
+      const constraints = [
+        { video: { facingMode: {exact:'environment'}, width:320, height:240, frameRate:{ideal:30} } },
+        { video: { facingMode: 'environment',         width:320, height:240, frameRate:{ideal:30} } },
+        { video: true }
+      ];
+
+      let lastError = null;
+      for (const c of constraints) {
+        try { this.stream = await navigator.mediaDevices.getUserMedia(c); break; }
+        catch (e) { lastError = e; }
+      }
+
+      if (!this.stream) {
+        /* Mostra errore inline (non alert — bloccato su file://) */
+        const isHttps = location.protocol === 'https:' || location.hostname === 'localhost';
+        const name    = lastError?.name || '';
+        let msg;
+        if (!isHttps) {
+          msg = '⚠️ Richiede HTTPS. Carica il file su GitHub Pages — non funziona da file://.';
+        } else if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+          msg = '⚠️ Permesso fotocamera negato. Abilita la fotocamera nelle impostazioni del browser.';
+        } else if (name === 'NotFoundError') {
+          msg = '⚠️ Nessuna fotocamera trovata sul dispositivo.';
+        } else {
+          msg = '⚠️ Fotocamera non disponibile (' + (name || 'errore') + '). Riprova o controlla i permessi.';
+        }
+        document.getElementById('status-msg').textContent = msg;
+        /* Non resettare l'UI: l'utente legge l'errore e tappa Annulla */
+        return;
+      }
+
+      /* Torch (flash LED) */
+      try {
+        const track = this.stream.getVideoTracks()[0];
+        const caps  = track.getCapabilities?.() || {};
+        if (caps.torch) await track.applyConstraints({ advanced: [{torch:true}] });
+      } catch {}
+
+      /* Video element */
+      const vid = document.getElementById('cam');
+      vid.srcObject = this.stream;
+
+      /* Attendi che il video sia effettivamente pronto (readyState >= 2) */
+      await new Promise(resolve => {
+        if (vid.readyState >= 2) { resolve(); return; }
+        vid.addEventListener('canplay', resolve, { once: true });
+        vid.play().catch(() => {});
+        /* Timeout di sicurezza: parte comunque dopo 2s */
+        setTimeout(resolve, 2000);
+      });
+
+      /* Canvas cattura (64×64 — bassa risoluzione, alta velocità) */
+      this.capCanvas = document.createElement('canvas');
+      this.capCanvas.width = this.capCanvas.height = 64;
+      this.capCtx = this.capCanvas.getContext('2d', {willReadFrequently:true});
+
+      /* Canvas PPG waveform */
+      this.ppgCanvas = document.getElementById('ppg-cv');
+      this.ppgCanvas.width  = this.ppgCanvas.offsetWidth  || 300;
+      this.ppgCanvas.height = this.ppgCanvas.offsetHeight || 100;
+      this.ppgCtx = this.ppgCanvas.getContext('2d');
+
+      document.getElementById('status-msg').textContent = 'Attendere avvio acquisizione…';
+
+      /* Timer countdown */
+      let rem = CFG.measureDuration;
+      document.getElementById('timer-num').textContent = rem;
+      this.timerInt = setInterval(() => {
+        rem--;
+        document.getElementById('timer-num').textContent = rem;
+        if (rem <= 0) { clearInterval(this.timerInt); this.stop(false); }
+      }, 1000);
+
+      /* Loop di cattura */
+      this._captureLoop(vid);
+    },
+
+    _captureLoop (vid) {
+      const frame = () => {
+        if (!this.stream?.active) return;
+
+        try {
+          /* Disegna frame ridotto e leggi ROI centrale (32×32) */
+          this.capCtx.drawImage(vid, 0, 0, 64, 64);
+          const px = this.capCtx.getImageData(16, 16, 32, 32).data;
+
+          let rSum = 0, n = 0;
+          for (let i = 0; i < px.length; i += 4) { rSum += px[i]; n++; }
+          const val = n ? rSum / n : 0;
+
+          const now = performance.now() - this.t0;
+          this.rawBuf.push(val);
+          this.tsArr.push(now);
+
+          /* Feedback qualità ogni ~10 frame */
+          if (this.rawBuf.length % 10 === 0) this._updateLiveUI();
+
+          /* Disegna waveform */
+          this._drawWaveform();
+        } catch {}
+
+        this.rafId = requestAnimationFrame(frame);
+      };
+      this.rafId = requestAnimationFrame(frame);
+    },
+
+    _updateLiveUI () {
+      const {score, msg} = SQ.live(this.rawBuf);
+      const fill = document.getElementById('q-fill');
+      fill.style.width = score + '%';
+      fill.style.background = score > 70 ? 'var(--green)' : score > 40 ? 'var(--yellow)' : 'var(--red)';
+      document.getElementById('q-num').textContent = score + '/100';
+      document.getElementById('status-msg').textContent = msg;
+    },
+
+    _drawWaveform () {
+      if (!this.ppgCtx || this.rawBuf.length < 2) return;
+      const {width:w, height:h} = this.ppgCanvas;
+      const ctx = this.ppgCtx;
+      const N = Math.min(this.rawBuf.length, 150);
+      const seg = this.rawBuf.slice(-N);
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < seg.length; i++) {
+        if (seg[i] < mn) mn = seg[i];
+        if (seg[i] > mx) mx = seg[i];
+      }
+      const range = mx - mn || 1;
+
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.strokeStyle = '#00d4aa';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      seg.forEach((v, i) => {
+        const x = (i / (N-1)) * w;
+        const y = h - ((v - mn) / range) * (h * .82) - h * .09;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    },
+
+    stop (cancelled) {
+      clearInterval(this.timerInt);
+      if (this.rafId) cancelAnimationFrame(this.rafId);
+      if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+      const vid = document.getElementById('cam');
+      vid.srcObject = null;
+
+      this._resetUI();
+
+      if (cancelled || this.rawBuf.length < 60) {
+        // Naviga solo se il router non ha già cambiato schermata (evita ricorsione)
+        if (App.router.current === 'measure') App.router.go('home');
+        return;
+      }
+
+      const result = this._process();
+      App.state.lastResult = result;
+
+      /* Salva solo se valida */
+      if (result.valid) {
+        DB.add({
+          id       : Date.now().toString(),
+          ts       : Date.now(),
+          duration : (this.tsArr[this.tsArr.length-1] || 0) / 1000,
+          valid    : true,
+          quality  : result.quality,
+          hr       : result.hr,
+          rmssd    : result.rmssd,
+          lnRmssd  : result.lnRmssd,
+          sdnn     : result.sdnn,
+          beatsDetected : result.beatsDetected,
+          beatsValid    : result.beatsValid,
+          artifactPct   : result.artifactPct,
+          readiness : null,
+          checkin   : null
+        });
+      }
+
+      App.router.go('result');
+    },
+
+    _process () {
+      const raw = this.rawBuf;
+      const ts  = this.tsArr;
+      if (raw.length < 30) return { valid:false, quality:0, issues:['Segnale troppo corto'] };
+
+      /* fs reale dai timestamp */
+      const totalMs = ts[ts.length-1] - ts[0];
+      const fs = (raw.length / totalMs) * 1000;
+
+      /* Pipeline DSP */
+      let sig = DSP.detrend(raw, CFG.detrendWindow, fs);
+      try { sig = DSP.bandpass(sig, fs, CFG.filterLow, CFG.filterHigh); }
+      catch { /* usa detrended se filtro fallisce */ }
+      const norm = DSP.normalize(sig);
+
+      const peaks   = DSP.detectPeaks(norm, fs);
+      const rr      = DSP.peaksToRR(peaks, ts);
+      const cleanRR = DSP.cleanRR(rr);
+      const metrics = DSP.calcHRV(cleanRR);
+      const {score:quality, issues} = SQ.final(raw, peaks, cleanRR, rr);
+
+      const artPct = rr.length ? Math.round((1 - cleanRR.length/rr.length)*100) : 0;
+      const valid  = quality >= CFG.minQuality && metrics !== null;
+
+      return {
+        valid, quality, issues,
+        beatsDetected : peaks.length,
+        beatsValid    : cleanRR.length + 1,
+        artifactPct   : artPct,
+        hr            : metrics?.hr     ?? null,
+        rmssd         : metrics?.rmssd  ?? null,
+        lnRmssd       : metrics?.lnRmssd ?? null,
+        sdnn          : metrics?.sdnn    ?? null,
+      };
+    },
+
+    _resetUI () {
+      document.getElementById('ph-instructions').style.display = '';
+      document.getElementById('ph-recording').style.display = 'none';
+      document.getElementById('q-fill').style.width = '0%';
+      document.getElementById('q-num').textContent = '--';
+      document.getElementById('timer-num').textContent = CFG.measureDuration;
+      document.getElementById('status-msg').textContent = 'Attendere avvio acquisizione…';
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     UI — renderer per ogni schermata
+     ------------------------------------------------------------------- */
+  const UI = {
+
+    /* ── HOME ── */
+    renderHome () {
+      const recs  = DB.load();
+      const today = recs[0];
+      const bl    = DB.baseline(7);
+      const validCount = recs.filter(r => r.valid).length;
+
+      let baseNote = '';
+      if (validCount < CFG.baselineDays) {
+        baseNote = `<div class="baseline-note">📐 Baseline in costruzione — ${validCount}/${CFG.baselineDays} misurazioni valide. Usa i trend con prudenza.</div>`;
+      }
+
+      /* Readiness */
+      let rdHtml = '';
+      if (today?.valid) {
+        const rd = today.readiness || Readiness.compute({hr:today.hr,lnRmssd:today.lnRmssd}, today.checkin, bl);
+        rdHtml = `
+          <div class="readiness-badge ${rd.color}">
+            <div class="rd-orb ${rd.color}"></div>
+            <div class="rd-label ${rd.color}">${rd.label}</div>
+            <div class="rd-desc">${rd.desc}</div>
+          </div>`;
+      } else {
+        rdHtml = `
+          <div class="card" style="text-align:center;padding:28px">
+            <div style="font-size:40px;margin-bottom:8px">💓</div>
+            <div style="color:var(--dim)">Nessuna misurazione oggi</div>
+          </div>`;
+      }
+
+      /* Arrow helper */
+      const arrow = (v, ref, higherIsBetter=true) => {
+        if (ref == null || v == null) return '';
+        const better = higherIsBetter ? v > ref : v < ref;
+        const worse  = higherIsBetter ? v < ref : v > ref;
+        if (better) return '<span class="metric-arrow arrow-up">↑</span>';
+        if (worse)  return '<span class="metric-arrow arrow-down">↓</span>';
+        return '<span class="metric-arrow arrow-flat">→</span>';
+      };
+
+      /* Metriche */
+      let mHtml = '';
+      if (today?.valid) {
+        mHtml = `
+          <div class="metrics-grid">
+            <div class="metric-tile">
+              <div class="metric-val">${today.hr?.toFixed(0) ?? '--'}${arrow(today.hr, bl?.hr, false)}
+                <sup>bpm</sup></div>
+              <div class="metric-lbl">HR a riposo</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-val">${today.lnRmssd?.toFixed(2) ?? '--'}${arrow(today.lnRmssd, bl?.lnRmssd)}</div>
+              <div class="metric-lbl">lnRMSSD</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-val">${today.rmssd?.toFixed(1) ?? '--'}<sup>ms</sup></div>
+              <div class="metric-lbl">RMSSD</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-val">${today.sdnn?.toFixed(1) ?? '--'}<sup>ms</sup></div>
+              <div class="metric-lbl">SDNN</div>
+            </div>
+          </div>`;
+
+        if (bl && bl.n >= 3) {
+          mHtml += `
+            <div class="card card-sm">
+              <div class="section-label">Baseline ${bl.n} misurazioni</div>
+              <div class="baseline-row">
+                <div class="bl-item"><div class="bl-val">${bl.lnRmssd.toFixed(2)}</div><div class="bl-lbl">lnRMSSD medio</div></div>
+                <div class="bl-item"><div class="bl-val">${bl.hr.toFixed(0)}</div><div class="bl-lbl">HR media (bpm)</div></div>
+                <div class="bl-item"><div class="bl-val">±${bl.lnRmssdSd.toFixed(2)}</div><div class="bl-lbl">SD lnRMSSD</div></div>
+              </div>
+            </div>`;
+        }
+      }
+
+      /* Check-in summary */
+      let ciHtml = '';
+      if (today?.checkin) {
+        const c = today.checkin;
+        ciHtml = `
+          <div class="card card-sm">
+            <div class="section-label">Check-in di oggi</div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dim2)">
+              <span>😴 ${c.sleep}/5</span>
+              <span>🧠 ${c.stress}/5</span>
+              <span>💪 ${c.muscle}/5</span>
+              <span>🩹 ${c.pain}/5</span>
+              <span>🎯 ${c.motivation}/5</span>
+            </div>
+            ${c.notes ? `<div style="margin-top:8px;font-size:13px;color:var(--dim);font-style:italic">"${c.notes}"</div>` : ''}
+          </div>`;
+      }
+
+      document.getElementById('home-content').innerHTML = `
+        <div class="header-row">
+          <div>
+            <div class="page-title">HRV Lab</div>
+            <div class="page-sub">${new Date().toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'})}</div>
+          </div>
+        </div>
+        ${baseNote}
+        ${rdHtml}
+        ${mHtml}
+        ${ciHtml}
+        <button class="btn btn-primary" style="margin-top:4px" onclick="App.router.go('measure')">+ Nuova misurazione</button>
+        <br>`;
+    },
+
+    /* ── RESULT ── */
+    renderResult () {
+      const r  = App.state.lastResult;
+      if (!r)  { App.router.go('home'); return; }
+      const bl = DB.baseline(7);
+
+      let html;
+      if (!r.valid) {
+        html = `
+          <div class="header-row"><div class="page-title">Risultato</div></div>
+          <div class="readiness-badge red">
+            <div class="rd-orb red"></div>
+            <div class="rd-label red">Misurazione non valida</div>
+            <div class="rd-desc">Qualità segnale: ${r.quality ?? 0}/100</div>
+          </div>
+          <div class="card">
+            <div class="section-label">Problemi rilevati</div>
+            ${(r.issues||['Segnale insufficiente']).map(i=>`<div style="font-size:14px;margin-bottom:5px">• ${i}</div>`).join('')}
+          </div>
+          <div class="card" style="font-size:13px;color:var(--dim);line-height:1.6">
+            Riprova tenendo il dito completamente fermo. Premi leggero — come sfiorare il sensore, non spingerlo. Ideale a riposo mattutino prima di caffè o allenamento.
+          </div>
+          <br>
+          <button class="btn btn-primary" onclick="App.router.go('measure')">Riprova</button>
+          <button class="btn btn-secondary" onclick="App.router.go('home')">Torna home</button>`;
+      } else {
+        const rd = Readiness.compute({hr:r.hr, lnRmssd:r.lnRmssd}, null, bl);
+        html = `
+          <div class="header-row"><div class="page-title">Risultato</div></div>
+          <div class="readiness-badge ${rd.color}">
+            <div class="rd-orb ${rd.color}"></div>
+            <div class="rd-label ${rd.color}">${rd.label}</div>
+            <div class="rd-desc">${rd.desc}</div>
+          </div>
+          <div class="metrics-grid">
+            <div class="metric-tile"><div class="metric-val">${r.hr?.toFixed(0)}<sup>bpm</sup></div><div class="metric-lbl">HR</div></div>
+            <div class="metric-tile"><div class="metric-val">${r.lnRmssd?.toFixed(2)}</div><div class="metric-lbl">lnRMSSD</div></div>
+            <div class="metric-tile"><div class="metric-val">${r.rmssd?.toFixed(1)}<sup>ms</sup></div><div class="metric-lbl">RMSSD</div></div>
+            <div class="metric-tile"><div class="metric-val">${r.sdnn?.toFixed(1)}<sup>ms</sup></div><div class="metric-lbl">SDNN</div></div>
+          </div>
+          <div class="card card-sm" style="display:flex;justify-content:space-around;font-size:13px;color:var(--dim2)">
+            <span>Qualità <b style="color:var(--text)">${r.quality}/100</b></span>
+            <span>Battiti <b style="color:var(--text)">${r.beatsValid}</b></span>
+            <span>Artefatti <b style="color:var(--text)">${r.artifactPct}%</b></span>
+          </div>
+          <br>
+          <button class="btn btn-primary" onclick="App.router.go('checkin')">Completa check-in →</button>
+          <button class="btn btn-secondary" onclick="App.router.go('home')">Salta check-in</button>`;
+      }
+
+      document.getElementById('result-content').innerHTML = html;
+    },
+
+    /* ── CHECKIN ── */
+    renderCheckin () {
+      const INT = [
+        ['rest','😴 Riposo'],['light','🚶 Leggero'],['medium','🏃 Medio'],
+        ['hard','💪 Duro'],['veryhard','🔥 Durissimo'],['unknown','❓ N/D']
+      ];
+      const mkSlider = (id, label, icon, defaultVal) => `
+        <div class="ci-item">
+          <div class="ci-label">
+            <span>${icon} ${label}</span>
+            <span class="ci-val" id="lbl-${id}">${defaultVal}</span>
+          </div>
+          <input type="range" min="1" max="5" value="${defaultVal}" id="sl-${id}"
+            oninput="document.getElementById('lbl-${id}').textContent=this.value">
+        </div>`;
+
+      document.getElementById('checkin-content').innerHTML = `
+        <div class="header-row"><div class="page-title">Check-in</div></div>
+        <div class="card">
+          ${mkSlider('sleep','Qualità sonno','😴',3)}
+          ${mkSlider('stress','Stress mentale','🧠',3)}
+          ${mkSlider('muscle','Stanchezza muscolare','💪',2)}
+          ${mkSlider('pain','Dolore','🩹',1)}
+          ${mkSlider('motivation','Voglia di allenarti','🎯',3)}
+        </div>
+        <div class="card">
+          <div class="section-label">Intensità allenamento ieri</div>
+          <div class="intensity-grid">
+            ${INT.map(([v,l]) => `<button class="int-btn${v==='rest'?' sel':''}" data-v="${v}" onclick="App.ui.selInt('${v}')">${l}</button>`).join('')}
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-label">Note libere</div>
+          <textarea id="ci-notes" rows="3" placeholder="Come ti senti oggi?"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="App.ui.saveCheckin()">Salva check-in</button>
+        <button class="btn btn-secondary" onclick="App.router.go('home')">Salta</button>
+        <br>`;
+
+      App.state.selInt = 'rest';
+    },
+
+    selInt (val) {
+      App.state.selInt = val;
+      document.querySelectorAll('.int-btn').forEach(b => b.classList.toggle('sel', b.dataset.v === val));
+    },
+
+    saveCheckin () {
+      const ci = {
+        sleep      : +document.getElementById('sl-sleep').value,
+        stress     : +document.getElementById('sl-stress').value,
+        muscle     : +document.getElementById('sl-muscle').value,
+        pain       : +document.getElementById('sl-pain').value,
+        motivation : +document.getElementById('sl-motivation').value,
+        intensity  : App.state.selInt,
+        notes      : document.getElementById('ci-notes').value.trim()
+      };
+      const r  = App.state.lastResult;
+      const bl = DB.baseline(7);
+      const rd = r ? Readiness.compute({hr:r.hr, lnRmssd:r.lnRmssd}, ci, bl) : null;
+      DB.updateFirst({ checkin:ci, readiness:rd });
+      App.router.go('home');
+    },
+
+    /* ── TRENDS ── */
+    _charts : {},
+    renderTrends () {
+      const days   = App.state.trendDays || 14;
+      const cutoff = Date.now() - days * 86_400_000;
+      const all    = DB.load().filter(r => r.valid && r.lnRmssd != null);
+      const data   = all.filter(r => r.ts >= cutoff).reverse();
+
+      document.getElementById('trends-content').innerHTML = `
+        <div class="header-row"><div class="page-title">Trend</div></div>
+        <div class="filter-row">
+          <button class="ftab${days===7?' active':''}" onclick="App.ui.setTDays(7)">7 gg</button>
+          <button class="ftab${days===14?' active':''}" onclick="App.ui.setTDays(14)">14 gg</button>
+          <button class="ftab${days===30?' active':''}" onclick="App.ui.setTDays(30)">30 gg</button>
+        </div>
+        ${data.length < 2
+          ? `<div class="empty-state"><div class="empty-icon">📈</div><div class="empty-title">Dati insufficienti</div><div class="empty-desc">Esegui almeno 2 misurazioni per vedere i trend</div></div>`
+          : `<div class="card"><div class="section-label">lnRMSSD</div><div class="chart-wrap"><canvas id="ch-ln"></canvas></div></div>
+             <div class="card"><div class="section-label">HR a riposo (bpm)</div><div class="chart-wrap"><canvas id="ch-hr"></canvas></div></div>
+             <div class="card"><div class="section-label">Sonno & Stress (1-5)</div><div class="chart-wrap"><canvas id="ch-sub"></canvas></div></div>`
+        }`;
+
+      if (data.length < 2) return;
+
+      const labels = data.map(r => new Date(r.ts).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'}));
+      const base = {
+        type:'line',
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{display:false} },
+          scales:{
+            x:{ grid:{color:'#1e1e1e'}, ticks:{color:'#555',font:{size:10}} },
+            y:{ grid:{color:'#1e1e1e'}, ticks:{color:'#555',font:{size:10}} }
+          },
+          elements:{ point:{radius:3}, line:{tension:.3} }
+        }
+      };
+
+      /* Destroy precedenti se esistono */
+      ['ch-ln','ch-hr','ch-sub'].forEach(id => {
+        try { const c = Chart.getChart(id); if(c) c.destroy(); } catch {}
+      });
+
+      new Chart('ch-ln', { ...base,
+        data:{ labels, datasets:[{ data:data.map(r=>r.lnRmssd?.toFixed(2)),
+          borderColor:'#00d4aa', backgroundColor:'rgba(0,212,170,.08)', fill:true }] }});
+
+      new Chart('ch-hr', { ...base,
+        data:{ labels, datasets:[{ data:data.map(r=>r.hr?.toFixed(0)),
+          borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,.08)', fill:true }] }});
+
+      const baseM = {
+        ...base,
+        options:{
+          ...base.options,
+          plugins:{ legend:{ display:true, labels:{color:'#666',font:{size:10}} } },
+          scales:{
+            ...base.options.scales,
+            y:{ ...base.options.scales.y, min:0, max:5 }
+          }
+        }
+      };
+      new Chart('ch-sub', { ...baseM,
+        data:{ labels,
+          datasets:[
+            { label:'Sonno', data:data.map(r=>r.checkin?.sleep||null),
+              borderColor:'#818cf8', backgroundColor:'rgba(129,140,248,.07)', fill:false },
+            { label:'Stress', data:data.map(r=>r.checkin?.stress||null),
+              borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,.07)', fill:false }
+          ]
+        }});
+    },
+
+    setTDays (d) { App.state.trendDays = d; this.renderTrends(); },
+
+    /* ── HISTORY ── */
+    renderHistory () {
+      const recs = DB.load();
+      let html = `<div class="header-row"><div class="page-title">Storico</div></div>`;
+
+      if (!recs.length) {
+        html += `<div class="empty-state"><div class="empty-icon">📅</div><div class="empty-title">Nessuna misurazione</div><div class="empty-desc">Inizia a misurare per vedere lo storico</div></div>`;
+      } else {
+        html += recs.map(r => {
+          const d   = new Date(r.ts);
+          const col = r.readiness?.color || (r.valid ? 'green' : 'red');
+          const lbl = r.readiness?.label || (r.valid ? 'Valida' : 'Non valida');
+          return `
+            <div class="h-item">
+              <div class="h-dot ${col}"></div>
+              <div style="flex:1;min-width:0">
+                <div class="h-date">${d.toLocaleDateString('it-IT',{weekday:'short',day:'numeric',month:'short'})} &middot; ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}</div>
+                <div class="h-meta">
+                  ${r.hr ? `HR ${r.hr.toFixed(0)} bpm` : ''}
+                  ${r.lnRmssd ? ` · lnRMSSD ${r.lnRmssd.toFixed(2)}` : ''}
+                  ${r.checkin?.sleep ? ` · 😴${r.checkin.sleep}` : ''}
+                </div>
+              </div>
+              <div class="h-q">${r.quality||0}/100</div>
+            </div>`;
+        }).join('');
+      }
+
+      document.getElementById('history-content').innerHTML = html;
+    },
+
+    /* ── SETTINGS ── */
+    renderSettings () {
+      const s = DB.settings();
+      document.getElementById('settings-content').innerHTML = `
+        <div class="header-row"><div class="page-title">Impostazioni</div></div>
+        <div class="card">
+          <div class="setting-row">
+            <div><div class="setting-lbl">Durata misurazione</div><div class="setting-sub">Secondi di acquisizione PPG</div></div>
+            <select onchange="App.ui.setSetting('duration',+this.value)">
+              <option value="60"  ${(!s.duration||s.duration==60)?'selected':''}>60 sec</option>
+              <option value="120" ${s.duration==120?'selected':''}>120 sec</option>
+              <option value="180" ${s.duration==180?'selected':''}>180 sec</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-lbl">Qualità minima per salvare</div><div class="setting-sub">Sotto questa soglia la misura viene scartata</div></div>
+            <select onchange="App.ui.setSetting('minQuality',+this.value)">
+              <option value="50"  ${s.minQuality==50?'selected':''}>50</option>
+              <option value="60"  ${s.minQuality==60?'selected':''}>60</option>
+              <option value="70"  ${(!s.minQuality||s.minQuality==70)?'selected':''}>70</option>
+              <option value="80"  ${s.minQuality==80?'selected':''}>80</option>
+            </select>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-label">Dati</div>
+          <button class="btn btn-secondary btn-sm" style="margin-bottom:8px" onclick="App.db.exportCSV()">📥 Esporta CSV</button>
+          <button class="btn btn-secondary btn-sm" style="margin-bottom:8px" onclick="App.ui.resetBL()">🔄 Reset baseline</button>
+          <button class="btn btn-danger btn-sm" onclick="App.ui.clearAll()">🗑 Cancella tutti i dati</button>
+        </div>
+        <div class="card">
+          <div class="section-label">Integrazione futura — Jump Lab</div>
+          <div style="font-size:13px;color:var(--dim);line-height:1.6">
+            I dati esportati (CSV) sono strutturati per confronto futuro con i dati di Jump Lab: salto verticale, RSI, tempo di contatto, carico allenamento.
+          </div>
+        </div>
+        <div class="card">
+          <div class="disclaimer">
+            ⚠️ Questa app è uno strumento personale di monitoraggio del recupero e non è un dispositivo medico. I dati non sostituiscono valutazioni mediche, diagnosi o indicazioni sanitarie.<br><br>
+            La misurazione PPG da smartphone è soggetta a variabilità — usa i dati come tendenze personali, non come valori clinici assoluti.
+          </div>
+        </div>
+        <div style="text-align:center;font-size:12px;color:var(--dim);margin:16px 0 32px">HRV Lab v1.0 · Strumento personale</div>`;
+    },
+
+    setSetting (k, v) {
+      DB.saveSetting(k, v);
+      if (k === 'duration')   CFG.measureDuration = v;
+      if (k === 'minQuality') CFG.minQuality = v;
+    },
+
+    resetBL ()  {
+      alert('La baseline verrà ricalcolata automaticamente dagli ultimi 7 giorni di misurazioni valide.');
+    },
+
+    clearAll () {
+      if (confirm('Cancellare TUTTI i dati? Questa azione è irreversibile.')) {
+        DB.clearAll();
+        App.router.go('home');
+      }
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     ROUTER
+     ------------------------------------------------------------------- */
+  const Router = {
+    current: 'home',
+
+    go (screen) {
+      const prev = this.current;
+      this.current = screen; // aggiornato PRIMA di qualsiasi callback, previene ricorsione
+
+      /* Cleanup camera se si esce da measure */
+      if (prev === 'measure' && screen !== 'measure') {
+        PPG.stop(true);
+      }
+
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.querySelectorAll('.nb').forEach(b => b.classList.remove('active'));
+
+      const el = document.getElementById(screen + '-screen');
+      if (el) el.classList.add('active');
+
+      const nb = document.querySelector(`.nb[data-s="${screen}"]`);
+      if (nb) nb.classList.add('active');
+
+      /* Scroll top */
+      document.getElementById('main').scrollTo(0, 0);
+
+      /* Render */
+      ({
+        home     : () => UI.renderHome(),
+        result   : () => UI.renderResult(),
+        checkin  : () => UI.renderCheckin(),
+        trends   : () => UI.renderTrends(),
+        history  : () => UI.renderHistory(),
+        settings : () => UI.renderSettings()
+      }[screen] || (() => {}))();
+    }
+  };
+
+  /* -------------------------------------------------------------------
+     PUBLIC API
+     ------------------------------------------------------------------- */
+  return {
+    config  : CFG,
+    db      : DB,
+    ppg     : PPG,
+    ui      : UI,
+    router  : Router,
+    state   : { lastResult:null, selInt:'rest', trendDays:14 },
+
+    init () {
+      const s = DB.settings();
+      if (s.duration)    CFG.measureDuration = s.duration;
+      if (s.minQuality)  CFG.minQuality = s.minQuality;
+      Router.go('home');
+    }
+  };
+
+})(); // end IIFE
+
+window.addEventListener('DOMContentLoaded', () => {
+  App.init();
+  /* Mostra banner HTTPS se necessario */
+  const isHttps = location.protocol === 'https:' || location.hostname === 'localhost';
+  if (!isHttps) {
+    const el = document.getElementById('https-warn');
+    if (el) el.style.display = '';
+  }
+});
+</script>
+</body>
+</html>
