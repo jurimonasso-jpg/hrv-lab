@@ -239,6 +239,13 @@ video#cam {
 }
 canvas#ppg-cv { width:100%; height:100%; display:block; }
 .status-msg { font-size:13px; color:var(--dim); text-align:center; min-height:38px; }
+.manual-torch-panel {
+  background:var(--card); border:1px solid var(--yellow-bd);
+  border-radius:12px; padding:12px; margin:8px 0 10px;
+  font-size:13px; color:var(--dim2); line-height:1.45;
+}
+.manual-torch-title { color:var(--yellow); font-weight:700; margin-bottom:6px; }
+.manual-torch-panel .btn { margin-top:8px; }
 /* Fallback quando Android/Chrome non permettono il torch: usa lo schermo come luce con camera frontale */
 body.screen-light-mode { background:#fff; }
 body.screen-light-mode #app { background:#fff; }
@@ -251,6 +258,8 @@ body.screen-light-mode video#cam { border-color:#111; box-shadow:0 0 0 9999px rg
 body.screen-light-mode .pulse-ring { border-color:rgba(0,0,0,.25); }
 body.screen-light-mode .ppg-wrap { border-color:#ddd; }
 body.screen-light-mode .btn-danger { box-shadow:0 2px 12px rgba(0,0,0,.15); }
+body.screen-light-mode .manual-torch-panel { background:#fff; color:#111; border-color:#111; }
+body.screen-light-mode .manual-torch-title { color:#111; }
 
 
 /* =========================================================
@@ -384,13 +393,14 @@ select {
           </div>
           <div class="instructions-list">
             <div class="step"><span class="step-n">1</span><span>Siediti in modo rilassato, schiena appoggiata</span></div>
-            <div class="step"><span class="step-n">2</span><span>Appoggia il dito sulla fotocamera + flash. Se il flash non parte, useremo la camera frontale con luce schermo</span></div>
+            <div class="step"><span class="step-n">2</span><span>Appoggia il dito sulla fotocamera + flash. Se il browser blocca il flash, puoi usare la modalità torcia manuale</span></div>
             <div class="step"><span class="step-n">3</span><span>Pressione <b>leggera</b> — non schiacciare il sensore</span></div>
             <div class="step"><span class="step-n">4</span><span>Respira normalmente, non muovere il dito per 60 secondi</span></div>
             <div class="step"><span class="step-n">5</span><span>Ideale: mattina prima di caffè e allenamento</span></div>
           </div>
           <br>
           <button class="btn btn-measure" onclick="App.ppg.start()">▶ Inizia misurazione</button>
+          <button class="btn btn-secondary" onclick="App.ppg.start('manualTorch')" style="margin-top:10px">🔦 Uso torcia manuale</button>
           <br>
           <button class="btn btn-secondary" onclick="App.router.go('home')" style="margin-top:10px">Annulla</button>
         </div>
@@ -414,6 +424,12 @@ select {
           </div>
           <div class="ppg-wrap"><canvas id="ppg-cv"></canvas></div>
           <div class="status-msg" id="status-msg">Attendere avvio acquisizione…</div>
+          <div id="manual-torch-panel" class="manual-torch-panel" style="display:none">
+            <div class="manual-torch-title">🔦 Modalità torcia manuale</div>
+            <div>1) Apri il pannello rapido del telefono.<br>2) Accendi <b>Torcia</b> manualmente.<br>3) Torna qui, appoggia il dito sulla camera vicino al flash e premi il pulsante sotto.</div>
+            <button id="manual-start-btn" class="btn btn-primary btn-sm" type="button">Ho acceso la torcia — avvia acquisizione</button>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="App.ppg.cycleManualCamera()">Cambia camera posteriore</button>
+          </div>
           <button class="btn btn-danger btn-sm" onclick="App.ppg.stop(true)" style="width:100%">✕ Annulla misurazione</button>
         </div>
 
@@ -818,6 +834,9 @@ const App = (() => {
     rawBuf    : [],   // valori canale rosso
     tsArr     : [],   // timestamp ms dall'inizio
     t0        : 0,
+    mode      : 'auto',
+    manualCandidates : [],
+    manualCamIndex   : 0,
 
     _cameraConstraints (deviceId = null) {
       const base = {
@@ -882,6 +901,125 @@ const App = (() => {
       }
     },
 
+
+
+    async _buildManualCameraCandidates () {
+      let probe = null;
+
+      /* Sblocca i nomi delle camere: senza permesso Android spesso non mostra le label */
+      try {
+        probe = await navigator.mediaDevices.getUserMedia(this._cameraConstraints());
+      } catch {}
+      finally {
+        probe?.getTracks?.().forEach(t => t.stop());
+      }
+
+      let devices = [];
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices = all.filter(d => d.kind === 'videoinput');
+      } catch {}
+
+      const rearDevices = devices
+        .filter(d => !/front|user|selfie|anteriore/.test((d.label || '').toLowerCase()))
+        .sort((a, b) => this._cameraScore(b) - this._cameraScore(a));
+
+      const candidates = rearDevices.map(d => this._cameraConstraints(d.deviceId));
+
+      /* Fallback: manteniamo solo camere posteriori/generiche, senza tentare il torch */
+      candidates.push({ video: { facingMode: { exact: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 60 } }, audio: false });
+      candidates.push(this._cameraConstraints());
+      candidates.push({ video: true, audio: false });
+
+      return candidates;
+    },
+
+    async _openManualCameraAt (index = 0) {
+      if (!this.manualCandidates.length) {
+        this.manualCandidates = await this._buildManualCameraCandidates();
+      }
+
+      const vid = document.getElementById('cam');
+      const total = this.manualCandidates.length || 1;
+      let lastError = null;
+
+      for (let i = 0; i < total; i++) {
+        const idx = (index + i) % total;
+        const c = this.manualCandidates[idx];
+        try {
+          this.stream?.getTracks?.().forEach(t => t.stop());
+          this.stream = await navigator.mediaDevices.getUserMedia(c);
+          this.manualCamIndex = idx;
+          vid.srcObject = this.stream;
+          await this._waitVideoReady(vid);
+          document.getElementById('status-msg').textContent =
+            'Camera posteriore pronta — ora puoi accendere la torcia dal pannello rapido';
+          return true;
+        } catch (e) {
+          lastError = e;
+        }
+      }
+
+      document.getElementById('status-msg').textContent =
+        '⚠️ Non riesco ad aprire una camera posteriore (' + (lastError?.name || 'errore') + ').';
+      return false;
+    },
+
+    async cycleManualCamera () {
+      if (this.timerInt || this.rafId) return;
+      document.getElementById('status-msg').textContent = 'Cambio camera posteriore…';
+      await this._openManualCameraAt(this.manualCamIndex + 1);
+    },
+
+    _waitManualTorchConfirm () {
+      const panel = document.getElementById('manual-torch-panel');
+      const btn = document.getElementById('manual-start-btn');
+      if (!panel || !btn) return Promise.resolve();
+
+      panel.style.display = '';
+      document.getElementById('timer-num').textContent = CFG.measureDuration;
+      document.getElementById('q-num').textContent = '--';
+      document.getElementById('q-fill').style.width = '0%';
+
+      return new Promise(resolve => {
+        const handler = () => {
+          btn.removeEventListener('click', handler);
+          panel.style.display = 'none';
+          resolve();
+        };
+        btn.addEventListener('click', handler, { once: true });
+      });
+    },
+
+    _startAcquisition (vid) {
+      this.rawBuf = [];
+      this.tsArr  = [];
+      this.t0     = performance.now();
+
+      /* Canvas cattura (64×64 — bassa risoluzione, alta velocità) */
+      this.capCanvas = document.createElement('canvas');
+      this.capCanvas.width = this.capCanvas.height = 64;
+      this.capCtx = this.capCanvas.getContext('2d', {willReadFrequently:true});
+
+      /* Canvas PPG waveform */
+      this.ppgCanvas = document.getElementById('ppg-cv');
+      this.ppgCanvas.width  = this.ppgCanvas.offsetWidth  || 300;
+      this.ppgCanvas.height = this.ppgCanvas.offsetHeight || 100;
+      this.ppgCtx = this.ppgCanvas.getContext('2d');
+
+      /* Timer countdown */
+      let rem = CFG.measureDuration;
+      document.getElementById('timer-num').textContent = rem;
+      this.timerInt = setInterval(() => {
+        rem--;
+        document.getElementById('timer-num').textContent = rem;
+        if (rem <= 0) { clearInterval(this.timerInt); this.stop(false); }
+      }, 1000);
+
+      /* Loop di cattura */
+      this._captureLoop(vid);
+    },
+
     async _openBestCamera () {
       let lastError = null;
       let probe = null;
@@ -937,19 +1075,38 @@ const App = (() => {
       return { stream: bestStream, torch: bestHasTorch, error: lastError };
     },
 
-    async start () {
+    async start (mode = 'auto') {
       /* Reset UI */
       document.getElementById('ph-instructions').style.display = 'none';
       document.getElementById('ph-recording').style.display = '';
       document.getElementById('status-msg').textContent = 'Avvio fotocamera…';
+      document.getElementById('manual-torch-panel').style.display = 'none';
+      this.mode = mode;
       this.rawBuf = [];
       this.tsArr  = [];
       this.t0     = performance.now();
+      this.manualCandidates = [];
+      this.manualCamIndex = 0;
 
       /* Verifica API disponibile */
       if (!navigator.mediaDevices?.getUserMedia) {
         document.getElementById('status-msg').textContent =
           '⚠️ Fotocamera non supportata. Usa Chrome su Android via HTTPS (GitHub Pages).';
+        return;
+      }
+
+      /* Video element */
+      const vid = document.getElementById('cam');
+
+      if (mode === 'manualTorch') {
+        document.body.classList.remove('screen-light-mode');
+        document.getElementById('status-msg').textContent = 'Apro camera posteriore per torcia manuale…';
+        const ok = await this._openManualCameraAt(0);
+        if (!ok) return;
+        await this._waitManualTorchConfirm();
+        if (!this.stream?.active) return;
+        document.getElementById('status-msg').textContent = '✓ Acquisizione avviata — tieni il dito fermo';
+        this._startAcquisition(vid);
         return;
       }
 
@@ -977,12 +1134,7 @@ const App = (() => {
       }
 
       document.getElementById('status-msg').textContent = 'Fotocamera selezionata — attivo il flash…';
-
-      /* Video element */
-      const vid = document.getElementById('cam');
       vid.srcObject = this.stream;
-
-      /* Attendi che il video sia effettivamente pronto (readyState >= 2) */
       await this._waitVideoReady(vid);
 
       /* Alcuni Android accettano torch solo dopo l'avvio reale del video */
@@ -991,45 +1143,19 @@ const App = (() => {
       if (camResult.torch) {
         document.body.classList.remove('screen-light-mode');
         document.getElementById('status-msg').textContent = '✓ Flash attivo — appoggia il dito su camera + flash';
-      } else {
-        /* Se il browser non espone il LED flash, passa a una modalità web-safe:
-           camera frontale + schermo bianco come fonte luminosa. */
-        document.getElementById('status-msg').textContent = 'Flash bloccato dal browser — passo a luce schermo…';
-        const frontOk = await this._openFrontScreenLightCamera();
-        if (frontOk) {
-          vid.srcObject = this.stream;
-          await this._waitVideoReady(vid);
-          document.getElementById('status-msg').textContent =
-            '✓ Modalità luce schermo — appoggia il dito sulla fotocamera frontale senza schiacciare';
-        } else {
-          document.body.classList.remove('screen-light-mode');
-          document.getElementById('status-msg').textContent =
-            '⚠️ Flash non attivabile dal browser. Usa una luce esterna vicino alla camera o una versione Android nativa.';
-        }
+        this._startAcquisition(vid);
+        return;
       }
 
-      /* Canvas cattura (64×64 — bassa risoluzione, alta velocità) */
-      this.capCanvas = document.createElement('canvas');
-      this.capCanvas.width = this.capCanvas.height = 64;
-      this.capCtx = this.capCanvas.getContext('2d', {willReadFrequently:true});
-
-      /* Canvas PPG waveform */
-      this.ppgCanvas = document.getElementById('ppg-cv');
-      this.ppgCanvas.width  = this.ppgCanvas.offsetWidth  || 300;
-      this.ppgCanvas.height = this.ppgCanvas.offsetHeight || 100;
-      this.ppgCtx = this.ppgCanvas.getContext('2d');
-
-      /* Timer countdown */
-      let rem = CFG.measureDuration;
-      document.getElementById('timer-num').textContent = rem;
-      this.timerInt = setInterval(() => {
-        rem--;
-        document.getElementById('timer-num').textContent = rem;
-        if (rem <= 0) { clearInterval(this.timerInt); this.stop(false); }
-      }, 1000);
-
-      /* Loop di cattura */
-      this._captureLoop(vid);
+      /* Se il browser blocca il LED, non forziamo più la camera frontale:
+         diamo all'utente il tempo di accendere la torcia manualmente. */
+      document.body.classList.remove('screen-light-mode');
+      document.getElementById('status-msg').textContent =
+        'Flash bloccato dal browser — prova la torcia manuale dal pannello rapido';
+      await this._waitManualTorchConfirm();
+      if (!this.stream?.active) return;
+      document.getElementById('status-msg').textContent = '✓ Acquisizione avviata — tieni il dito fermo';
+      this._startAcquisition(vid);
     },
 
     _captureLoop (vid) {
@@ -1182,6 +1308,7 @@ const App = (() => {
       document.getElementById('q-num').textContent = '--';
       document.getElementById('timer-num').textContent = CFG.measureDuration;
       document.getElementById('status-msg').textContent = 'Attendere avvio acquisizione…';
+      document.getElementById('manual-torch-panel').style.display = 'none';
     }
   };
 
